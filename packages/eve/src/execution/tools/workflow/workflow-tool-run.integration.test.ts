@@ -733,7 +733,7 @@ describe("workflow tools", () => {
 
   // #4923: a turn's principal is fixed. Another person's typed text must not
   // answer the turn's question; it waits and runs as their own turn.
-  it.fails.each([
+  it.each([
     {
       answers: { alice: "Deploy", bob: "Cancel" },
       execute: confirmDeployWorkflow,

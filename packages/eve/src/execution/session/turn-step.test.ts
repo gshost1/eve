@@ -341,9 +341,9 @@ function createStubSession(overrides: Partial<HarnessSession> = {}): HarnessSess
   };
 }
 
-function createSerializedContext(): Record<string, unknown> {
+function createSerializedContext(auth: SessionAuthContext | null = null): Record<string, unknown> {
   const ctx = new ContextContainer();
-  ctx.set(AuthKey, null);
+  ctx.set(AuthKey, auth);
   ctx.set(BundleKey, createStubBundle());
   ctx.set(ChannelKey, threadContextAdapter);
   ctx.set(ContinuationTokenKey, "http:thread-context");
@@ -521,7 +521,7 @@ describe("routeProxiedDeliverStep", () => {
     installSessionStoreMocks([session]);
 
     const result = await routeProxiedDeliverStep({
-      serializedContext: createSerializedContext(),
+      serializedContext: createSerializedContext(auth),
       delivery: {
         kind: "deliver",
         auth,
@@ -584,7 +584,7 @@ describe("routeProxiedDeliverStep", () => {
       workflowWritesByNamespace.clear();
       const result = await runSessionStateStep(
         {
-          serializedContext: createSerializedContext(),
+          serializedContext: createSerializedContext(auth),
           delivery: { auth, kind: "deliver" as const, payloads: [{ message: "approve" }] },
           sessionWritable: createTestWritable(),
           sessionState,
