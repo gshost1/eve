@@ -104,23 +104,23 @@ describe("SessionInputQueue", () => {
     };
     const bob = { ...alice, principalId: "bob" };
     const openTurn = { callerCallId: undefined, principal: principalOf(alice) };
-    const queue = new SessionInputQueue();
+    const queue = new SessionInputQueue([]);
     const answer = { inputResponses: [{ optionId: "stop", requestId: "limit-1" }] };
     const bobText = queue.enqueueDelivery({
       auth: bob,
       kind: "deliver",
       payloads: [{ message: "bob here" }],
-    }).sequence;
+    })!.sequence;
     const bobMixed = queue.enqueueDelivery({
       auth: bob,
       kind: "deliver",
       payloads: [answer, { message: "and stop" }],
-    }).sequence;
+    })!.sequence;
     const aliceText = queue.enqueueDelivery({
       auth: alice,
       kind: "deliver",
       payloads: [{ message: "keep going" }],
-    }).sequence;
+    })!.sequence;
 
     expect(queue.takeNext({ openTurn })).toEqual({
       delivery: { auth: bob, kind: "deliver", payloads: [answer] },

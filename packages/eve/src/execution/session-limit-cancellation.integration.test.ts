@@ -167,7 +167,10 @@ describe("session-limit continuation decline integration", () => {
     const bob: SessionAuthContext = { ...alice, principalId: "bob" };
     const seen: (readonly [string, unknown])[] = [];
     const runtime = await createTestRuntime({
-      agent: { limits: { maxInputTokensPerSession: 1 }, name: "limit-foreign-message" },
+      agent: {
+        limits: { sessionUsage: ({ window }) => window.inputTokens >= 1 },
+        name: "limit-foreign-message",
+      },
       modules: [
         {
           logicalPath: "hooks/observe.ts",
