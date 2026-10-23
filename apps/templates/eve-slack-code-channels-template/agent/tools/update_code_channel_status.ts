@@ -8,7 +8,7 @@ import { codeChannelStatus } from "../lib/code-channel";
 export default defineDynamic({
   events: {
     "turn.started": (_event, ctx) =>
-      ctx.session.auth.current?.attributes.code_channel === "true"
+      ctx.channel.metadata?.codeChannel === true
         ? defineTool({
             description:
               "Show the pull request and test status in this code channel's context bar. Call it when you open or update a pull request, and when tests start, pass, or fail. Omitted fields keep their last value.",
