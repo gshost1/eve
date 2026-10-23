@@ -27,6 +27,7 @@ export async function sendToChannel(
   return await sendToChannelStep({
     auth: options.auth,
     bundle: context.bundle,
+    callerSessionId: context.parent.sessionId,
     channel,
     history: options.history,
     localDevRequest: context.localDevRequest,

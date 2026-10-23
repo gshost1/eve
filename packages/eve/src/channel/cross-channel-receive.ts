@@ -152,6 +152,7 @@ interface InvokeChannelReceiveInput {
   readonly target: Pick<CrossChannelTarget, "name" | "receive" | "adapter" | "turnPolicy">;
   readonly input: {
     readonly auth: SessionAuthContext | null;
+    readonly caller?: { readonly sessionId: string };
     readonly history?: readonly SessionHistoryMessage[];
     readonly message: string | UserContent;
     readonly target: Readonly<Record<string, unknown>>;

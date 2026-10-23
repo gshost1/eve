@@ -10,6 +10,8 @@ import type { SessionHistoryMessage } from "#shared/session-history.js";
 
 export interface ChannelHandoffInput {
   readonly auth: SessionAuthContext | null;
+  /** The session whose workflow tool sent the message, which `receive()` gets as `caller`. */
+  readonly callerSessionId: string;
   readonly bundle: AgentSessionContext["bundle"];
   readonly channel: string;
   readonly history?: readonly SessionHistoryMessage[];
@@ -36,6 +38,7 @@ export async function sendToChannelStep(
         input.channel,
         {
           auth: input.auth,
+          caller: { sessionId: input.callerSessionId },
           history: input.history,
           message: input.message,
           target: input.target,

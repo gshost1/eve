@@ -8,7 +8,11 @@ import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import { createAgentSessions } from "#execution/agent-sessions/session.js";
 import { sendToChannel } from "#execution/tools/workflow/channel-handoff.js";
 import { createRunUsageTally, type RunUsageTally } from "#execution/agent-sessions/usage.js";
-import type { WorkflowSharedContext, WorkflowToolContext } from "#tools/workflow-definition.js";
+import type {
+  WorkflowSharedContext,
+  WorkflowToolChannel,
+  WorkflowToolContext,
+} from "#tools/workflow-definition.js";
 import {
   ask,
   attachWorkflowToolRunContext,
@@ -298,7 +302,27 @@ export function createSharedContext(
       ),
     sendToChannel: async (name, message, options) =>
       await sendToChannel(input.agentContext, name, message, options),
+    channel: workflowToolChannel(input.agentContext),
     toolName: input.toolName,
+  };
+}
+
+// eve keys an authored channel's adapter by its path-derived name behind this prefix.
+const AUTHORED_CHANNEL_KIND_PREFIX = "channel:";
+
+/** `ctx.channel` for a call: the channel that serves the calling session. */
+function workflowToolChannel(context: AgentSessionContext): WorkflowToolChannel {
+  const projection = context.channelMetadata;
+  if (projection === undefined) return {};
+  const name =
+    context.conversation?.channel.name ??
+    (projection.kind.startsWith(AUTHORED_CHANNEL_KIND_PREFIX)
+      ? projection.kind.slice(AUTHORED_CHANNEL_KIND_PREFIX.length)
+      : undefined);
+  return {
+    kind: projection.kind,
+    metadata: projection.metadata,
+    ...(name !== undefined && { name }),
   };
 }
 

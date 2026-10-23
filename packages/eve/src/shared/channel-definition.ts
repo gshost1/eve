@@ -50,6 +50,12 @@ export interface GenericReceiveInput<TReceiveTarget = Record<string, unknown>> {
    * `from().send()` passes no `history` of its own.
    */
   readonly history?: readonly SessionHistoryMessage[];
+  /**
+   * The session that sent the message, when a workflow tool sent it with
+   * `ctx.sendToChannel()`. Absent for a route, schedule, or event handler,
+   * which has no calling session. eve sets it, so the caller can't change it.
+   */
+  readonly caller?: { readonly sessionId: string };
 }
 
 /**

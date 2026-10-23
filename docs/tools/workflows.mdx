@@ -822,6 +822,8 @@ A step that fails after delivering retries the delivery with the same idempotenc
 target maps to the same address again, the session there gets the message and `history` once. On
 a target the channel gives a new address each time, the retry starts a second session instead.
 
+To reach the channel that serves the calling session, read `ctx.channel`. `name` is that channel's path-derived name, the one `sendToChannel()` takes, so a tool can reply where it was called from without hard-coding a channel. `kind` and `metadata` are what [hooks](/docs/guides/hooks) and [dynamic resolvers](/docs/guides/dynamic-capabilities) see: `metadata` is what the channel's `metadata(state)` hook projects for the session, such as a Slack thread's `channelId` and `threadTs`. The channel's `receive` hook gets the calling session as `input.caller`.
+
 `ctx.sendToChannel` differs from `ctx.agent`:
 
 - The session belongs to the channel. People on that channel continue it, and it has no parent.

@@ -111,6 +111,19 @@ export interface AgentSession {
   ): Promise<AgentResponse<TOutput>>;
 }
 
+/** The channel that serves a workflow tool's calling session, as `ctx.channel` holds it. */
+export interface WorkflowToolChannel {
+  /**
+   * The channel's path-derived name, such as `"slack"` for
+   * `agent/channels/slack.ts`: what `sendToChannel()` takes.
+   */
+  readonly name?: string;
+  /** The channel's identity, as hooks and dynamic resolvers see it. */
+  readonly kind?: string;
+  /** What the channel's `metadata(state)` hook projects for the session. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
 /** Options for {@link WorkflowSharedContext.sendToChannel}. */
 export interface WorkflowChannelSendOptions<TTarget = Record<string, unknown>> {
   /** Where on the channel the message goes, as the channel's `receive()` hook accepts it. */
@@ -139,6 +152,8 @@ export type WorkflowSharedContext = Pick<
   agent(name: string, options?: AgentSessionOptions): AgentSession;
   /** Metadata for agents callable by this workflow, including hidden agents. */
   agents: Readonly<Record<string, WorkflowAgentMetadata>>;
+  /** The channel that serves the calling session, as hooks and dynamic resolvers see it. */
+  readonly channel: WorkflowToolChannel;
   /**
    * Ask the human on the session's channel; awaiting the answer suspends the
    * run. The request is withdrawn, resolving as `cancelled`, when
