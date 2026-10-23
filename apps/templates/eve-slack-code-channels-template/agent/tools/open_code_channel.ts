@@ -1,3 +1,3 @@
-import { openCodeChannel } from "eve/channels/slack/tools";
+import { openCodeChannel } from "eve/tools/open_code_channel";
 
 export default openCodeChannel();
