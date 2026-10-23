@@ -111,6 +111,8 @@ validator accepts. The Vercel provider type-checks it against
 
 ```ts
 export interface SandboxConnection<Extensions extends object = {}> {
+  /** Absolute; relative paths resolve from it and commands start in it. Defaults to `/workspace`. */
+  readonly workspaceRoot?: string;
   spawn(options: {
     readonly command: string;
     readonly workingDirectory: string;
@@ -145,8 +147,9 @@ Each method has a fixed contract:
   before sending it, so a bytes-only primitive does not regress them.
 - Every path a connection receives is absolute, and `workingDirectory` is
   always set. eve is the only owner of path resolution: relative paths and a
-  relative or missing `workingDirectory` resolve from `/workspace`, which every
-  built-in's `resolvePath` already does.
+  relative or missing `workingDirectory` resolve from the connection's
+  `workspaceRoot`, `/workspace` unless the connection declares another
+  absolute directory. Every built-in keeps the default.
 
 eve derives the rest of `SandboxSession`: `run` over `spawn`, binary and text
 variants, encodings and line ranges, single-file writes over `writeFiles`, path
@@ -217,7 +220,7 @@ export interface SandboxPrepareContext {
   templateKey(identity: SandboxIdentity): string;
   /** A stable read-only host directory with `workspace/` and `skills/`, when one exists. */
   resourcesDirectory(): Promise<string | undefined>;
-  /** Seeds `/workspace` and `$HOME/.agents/skills`, then runs authored `prepare`. */
+  /** Seeds the connection's workspace root and `$HOME/.agents/skills`, then runs authored `prepare`. */
   populate(
     connection: SandboxConnection<object>,
     options?: { readonly mountedAt?: string },
@@ -267,7 +270,7 @@ reproducible.
 `populate()` writes the workspace and skill files through
 `connection.writeFiles()` in one batch. With `mountedAt`, the provider has
 mounted `resourcesDirectory()` read-only at that sandbox path, and `populate()`
-copies `<mountedAt>/workspace/.` into `/workspace` and `<mountedAt>/skills/.`
+copies `<mountedAt>/workspace/.` into the workspace root and `<mountedAt>/skills/.`
 into `$HOME/.agents/skills` instead of writing them, as Docker does today.
 Either way, authored `prepare` runs next, with a logging session over the same
 connection.
@@ -311,8 +314,8 @@ wiring, and Docker CLI and Vercel SDK glue stay internal.
 ```text
 build (eve build, or first access in eve dev)
   eve ─ prepare(ctx) ─▶ provider: create build instance → connection
-                        ctx.populate(connection) ─▶ eve: write /workspace and
-                          $HOME/.agents/skills, then run authored prepare
+                        ctx.populate(connection) ─▶ eve: write the workspace root
+                          and $HOME/.agents/skills, then run authored prepare
                         provider: capture image or snapshot → artifact (JSON)
   eve: store artifact in sandbox-prepared-artifacts.json (ships with deployment)
 
@@ -322,14 +325,19 @@ runtime
                  eve checkpoints { providerName, state, stateProtocolVersion }
   later step   ─ resume(ctx, artifact, state) → connection
                  └─ throws SandboxSessionGoneError → eve clears state, reruns selector
+  step ends        → connection.close?() (a turn's step, a "use step" function, or an
+                     invokeTool call; the next step resumes through a new connection)
   sandbox.stop()   → connection.stop(), connection.close?()
   sandbox.delete() → connection.close?(), onSessionEnd(ctx, state, { reason: "deleted" }),
                      eve clears state
-  process exit     → connection.stop(), connection.close?() (failures logged, not thrown)
-  keyed call ends  → connection.close?()
-  terminal outcome → connection.close?() for this process's connections,
+  process exit     → connection.stop(), connection.close?() on the connections the process
+                     still holds: any connection mid-step, and each session's latest
+                     connection without close() (failures logged, not thrown); a provider
+                     with close() and remote compute bounds idle compute itself
+  terminal outcome → connection.close?() for a connection the ending step holds,
                      onSessionEnd(ctx, state | null, { reason })
-  (stop and close run at most once per connection; a failed close never blocks deletion)
+  (close runs at most once per connection; stop is idempotent and may run again after
+  the connection resumes; a failed close never blocks deletion)
 ```
 
 ## Invariants
@@ -363,8 +371,10 @@ runtime
   Template retention and pruning stay with the provider.
 - **Seeding.** `populate()` writes workspace and skill files before authored
   `prepare`, and runs only at build time. Runtime never seeds.
-- **Paths.** Relative paths and working directories resolve from `/workspace`;
-  eve resolves `$HOME` in skill targets. This changes one behavior: Vercel
+- **Paths.** Relative paths and working directories resolve from the
+  connection's workspace root; eve resolves `$HOME` in skill targets.
+  `session.resolvePath(".")` returns the root, which is how the file tools,
+  attachment staging, and GitHub checkouts find it. This changes one behavior: Vercel
   passes a relative `workingDirectory` to the SDK unchanged today, while Docker
   and just-bash already resolve it from `/workspace`. The Vercel migration PR
   states this in its changeset.
@@ -395,10 +405,10 @@ names match.
 | just-bash      | root directory from hash of `{ sessionId, version: 2 }`                  | `{ autoInstall, customCommands, filesystem, version: 2 }`, first 24 hex                                                                                                                     |
 
 Docker mounts `await ctx.resourcesDirectory()` and calls
-`ctx.populate(connection, { mountedAt: "/eve/resources" })`. Vercel's
-`DefaultSandbox` facade skips preparation when `ctx.isEmpty`;
-`VercelSandbox.environment()` does not. Vercel and just-bash set
-`toolSessions: true`; only just-bash needs `close()`.
+`ctx.populate(connection, { mountedAt: "/eve/resources" })`. Vercel skips
+preparation when `ctx.isEmpty` and no `source` is set, in
+`VercelSandbox.environment()` itself and therefore under `DefaultSandbox` too.
+Vercel and just-bash set `toolSessions: true`; no built-in needs `close()`.
 
 ## Custom provider example
 
@@ -517,8 +527,13 @@ the last step. There are no public dual-shape overloads.
 3. Migrate Docker, with the golden key and name test.
 4. Migrate Vercel Sandbox, with the golden key and name test. Its changeset
    notes that a relative `workingDirectory` now resolves from `/workspace`.
+   Implemented: `VercelSandbox.environment()` itself keeps skipping an empty
+   preparation without a `source`, because deployed self-modification relies
+   on it, and the same step removed `Drive` (minor changeset).
 5. Make core consume the new shape directly. Remove the internal old shape,
-   and the tool-session `WeakMap`. Add a
+   and the tool-session `WeakMap`. Close a connection when the step that
+   opened it lets go of it; until then, eve closes connections only at the
+   other lifecycle points above. Add a
    `guard:invariants` rule for files under `src/execution/sandbox/bindings/`
    and `src/sandbox/providers/`: they may import the provider contract only
    through `#public/sandbox/*`, and may not import core sandbox modules
@@ -526,8 +541,25 @@ the last step. There are no public dual-shape overloads.
    `#execution/tool-session/*`, `#runtime/sandbox/*`, or
    `#shared/sandbox-{provider,session,write-files}.js`). Engine helpers such
    as other binding modules, stream utilities, and the optional-package loader
-   stay allowed.
-6. Later: a host provider on the same contract.
+   stay allowed. Implemented: `ensureSandboxAccess` runs the implementation and
+   its connections directly, `createConnectionSession()` in
+   `execution/sandbox/session.ts` derives every session, and `prewarm.ts`
+   builds the prepare context. A workflow step, a turn's step, and a keyed or
+   unkeyed `invokeTool` call close their connection when they end; after a
+   turn's step, a connection without `close()` stays registered for server
+   shutdown. `DefaultSandbox` is a `defineSandboxProvider()` selector over the
+   three built-ins and keeps its two internal hooks: session end receives the
+   prepared artifact, and records the picked provider wrote still resume. The
+   guard is rule 44. The opaque provider runtime on `SandboxEnvironment` bumped
+   six extension contract epochs, all retained.
+6. Workspace-root paths. Implemented: `SandboxConnection.workspaceRoot`
+   declares the root, defaulting to `/workspace`; eve rejects a relative one
+   when it opens the connection. The built-in file tools accept paths
+   relative to the root, `glob` and `grep` search it by default, and
+   model-facing prompts no longer name `/workspace`, because they are
+   composed before any sandbox opens. The skill root stays
+   `$HOME/.agents/skills`, falling back to `skills/` under the workspace root.
+7. Later: a host provider on the same contract.
 
 ## Open questions
 

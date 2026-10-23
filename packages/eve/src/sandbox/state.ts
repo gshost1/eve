@@ -1,11 +1,7 @@
 import type { SandboxSession } from "#public/definitions/sandbox.js";
+import type { SandboxProviderRuntime, SandboxSessionContext } from "#sandbox/provider.js";
 import type { SandboxEnvironmentIdentity } from "#shared/sandbox-environment.js";
-import type {
-  SandboxDeleteOptions,
-  SandboxPreparedArtifact,
-  SandboxProviderRuntime,
-  SandboxProviderSessionContext,
-} from "#shared/sandbox-provider.js";
+import type { SandboxDeleteOptions, SandboxPreparedArtifact } from "#shared/sandbox-provider.js";
 
 export type SandboxSessionEndReason = "completed" | "expired" | "failed";
 
@@ -81,8 +77,8 @@ export function resolvePersistedSandboxSessionState(
 }
 
 /** Session-end cleanup that also needs the current build's prepared artifact. */
-export type SandboxSessionEndWithArtifact = (
-  context: SandboxProviderSessionContext,
+type SandboxSessionEndWithArtifact = (
+  context: SandboxSessionContext,
   state: SandboxPreparedArtifact | null,
   options: {
     readonly artifact: SandboxPreparedArtifact | undefined;
@@ -111,10 +107,28 @@ export function getSessionEndWithArtifact(
   return sessionEndsWithArtifact.get(implementation);
 }
 
+/**
+ * Background work that may need the sandbox. It calls `open` only when it
+ * does, so work that turns out to have nothing to do never opens it. Calling
+ * the access's `get()` from the work waits on the work itself.
+ */
+export type SandboxPreparation = (open: () => Promise<SandboxSession>) => Promise<void>;
+
 export interface SandboxAccess {
   readonly environment?: SandboxEnvironmentIdentity;
   captureState(): Promise<SandboxState>;
   delete?(options?: SandboxDeleteOptions): Promise<void>;
+  /** Resolves once the sandbox is open and every queued preparation has run. */
   get(): Promise<SandboxSession | null>;
+  /**
+   * Opens the sandbox without waiting for queued preparation, for framework
+   * work that needs only the connection, such as staging attachments.
+   */
+  open(): Promise<SandboxSession | null>;
+  /**
+   * Queues `work` to run in the background, in order; without `work`, opens
+   * the sandbox in the background. Returns at once and never throws.
+   */
+  prepare(work?: SandboxPreparation): void;
   stop(): Promise<void>;
 }

@@ -3,7 +3,7 @@ title: "Sandbox"
 description: "Configure the isolated filesystem and command environment used by an eve agent."
 ---
 
-Every eve agent has one sandbox rooted at `/workspace`. The built-in `bash`, `read_file`, and `write_file` tools use it. Without an authored sandbox file, eve selects the best available environment automatically.
+Every eve agent has one sandbox. Its workspace root, where commands start and relative paths resolve from, is `/workspace` on every built-in provider. The built-in `bash`, `read_file`, and `write_file` tools use it. Without an authored sandbox file, eve selects the best available environment automatically.
 
 ## Use the sandbox
 
@@ -26,7 +26,7 @@ export default defineTool({
 });
 ```
 
-Relative paths resolve under `/workspace`. `run()` returns `{ exitCode, stdout, stderr }`; a nonzero exit code does not throw automatically. Use `spawn()` for a long-running process.
+Relative paths resolve from the workspace root, and `sandbox.resolvePath(".")` returns its absolute path. `run()` returns `{ exitCode, stdout, stderr }`; a nonzero exit code does not throw automatically. Use `spawn()` for a long-running process.
 
 Built-in environments set `AI_AGENT=eve` on every `run()` and `spawn()` call, including the `bash` tool and `prepare`, so agent-aware CLIs such as `vercel` skip interactive prompts. To use a different value, set `AI_AGENT` in the environment's `env` option or pass it in the `env` of one `run()` or `spawn()` call.
 
@@ -52,9 +52,9 @@ export const environment = DefaultSandbox.environment();
 export default defineSandbox(() => environment.open());
 ```
 
-`environment.open()` starts the persistent sandbox owned by the current eve session. The `defineSandbox()` selector runs until initialization succeeds, then eve checkpoints the selected provider and its state. Later workflow steps and process restarts call the provider's `resume()` directly without rerunning the selector or `environment.open()`.
+`environment.open()` starts the persistent sandbox owned by the current eve session. The `defineSandbox()` selector runs until initialization succeeds, then eve checkpoints the selected provider and its state. Later workflow steps and process restarts call the provider's `resume()` directly without rerunning the selector or `environment.open()`. Once a session has recorded its sandbox, eve resumes it in the background when each turn starts, so a tool that uses the sandbox waits only for whatever remains of the resume.
 
-Pass options for the live sandbox to `open()`, then configure the returned sandbox before returning it. `open()` applies its options only when it creates the sandbox. Initialization can run more than once against the same sandbox, for example when a subagent that shares the sandbox opens it before the parent does, when a [workflow step](/docs/tools/workflows#use-the-session-sandbox-in-a-step) opens it before the session records it, or on the next access after an initialization that failed. Make it safe to repeat:
+Pass options for the live sandbox to `open()`, then configure the returned sandbox before returning it. `open()` applies its options only when it creates the sandbox. Initialization can run more than once against the same sandbox, for example when a subagent that shares the sandbox opens it before the parent does, when a [workflow step](/docs/tools/workflows#use-the-session-sandbox-in-a-step) opens it before the session records it, when the first turn of a prewarmed session opens it while prewarming is still starting it, or on the next access after an initialization that failed. Make it safe to repeat:
 
 ```ts
 import { defineSandbox } from "eve/sandbox";
@@ -68,6 +68,8 @@ export default defineSandbox(async ({ session }) => {
   return sandbox;
 });
 ```
+
+When a client prewarms a session, for example with `useEveAgent({ prewarm: true })`, eve runs the selector before the first message arrives. `session.auth` then describes the request that created the session, and the first message's `onMessage` hook can return a different identity. Do not derive per-user sandbox options or `defineState()` values from `session.auth` in an agent whose clients prewarm sessions: eve keeps both from the prewarming run. See [prewarming](/docs/guides/frontend/overview#returned-state) for when eve prewarms a session.
 
 The environment export is required because `eve build` prepares immutable environment inputs before a session exists.
 
@@ -128,37 +130,17 @@ agent/sandbox/
 
 Files under `agent/sandbox/workspace/` seed writable `/workspace`. eve copies the seed into the prepared environment when it prepares a new environment generation, and each new session sandbox starts from that copy. Existing live sandbox state is not overwritten by later seed changes.
 
-Agent skills are compiled into a separate resource tree and exposed at `$HOME/.agents/skills`. These are stable paths across every built-in provider, so instructions and tools can refer to `/workspace` and `$HOME/.agents/skills`. eve resolves `$HOME` by reading it inside the sandbox; when a sandbox has no usable home directory, skill paths fall back to `/workspace/skills`. Do not refer to a concrete home directory or `/eve/resources`, which is provider-internal staging.
+Agent skills are compiled into a separate resource tree and exposed at `$HOME/.agents/skills`. These are stable paths across every built-in provider, so instructions and tools can refer to `/workspace` and `$HOME/.agents/skills`. A [custom provider](/docs/sandbox/custom-providers) can declare a different workspace root, so prefer relative paths in code that runs on any provider. eve resolves `$HOME` by reading it inside the sandbox; when a sandbox has no usable home directory, skill paths fall back to `skills/` under the workspace root. Do not refer to a concrete home directory or `/eve/resources`, which is provider-internal staging.
 
-Providers receive both trees with explicit metadata. `source.kind` is `"none"` when the agent has no managed workspace or skill files, `"materialized"` when eve has also written the compiled files to the host directory at `path`, and `"inline"` when the contents are available only in each tree's `files`:
-
-```ts
-interface SandboxProviderResources {
-  source:
-    | { kind: "none" }
-    | { kind: "inline"; key: string }
-    | { kind: "materialized"; key: string; path: string };
-  workspace?: SandboxProviderResourceTree;
-  skills?: SandboxProviderResourceTree;
-}
-
-interface SandboxProviderResourceTree {
-  key: string;
-  files: SandboxProviderResourceFile[];
-  mountPath: string;
-  targetPath: string;
-}
-```
-
-Docker mounts the compiled trees read-only under `/eve/resources`, copies workspace seeds into writable `/workspace`, and exposes skills read-only where possible. Vercel's snapshot environment writes workspace and skill contents before capturing its snapshot. Custom providers decide whether to upload, mount, or write each tree, but must expose the final target paths before authored preparation runs.
+Docker mounts the compiled trees read-only under `/eve/resources` and copies them into place. Vercel Sandbox writes workspace and skill files into the build sandbox before capturing its snapshot. A custom provider seeds both trees with `ctx.populate()` when it prepares a template; see [Bake files into templates](/docs/sandbox/custom-providers#bake-files-into-templates).
 
 ## Inbound attachments
 
-eve writes byte-backed files that reach the agent into the sandbox under `/workspace/.eve/attachments/` and keeps only a reference in session history. This covers files attached to user messages and files that tools return to the model with `toolOutputPart.file` or as MCP image, audio, and blob content.
+eve writes byte-backed files that reach the agent into the sandbox under `.eve/attachments/` in the workspace root (`/workspace/.eve/attachments/` on built-in providers) and keeps only a reference in session history. This covers files attached to user messages and files that tools return to the model with `toolOutputPart.file` or as MCP image, audio, and blob content.
 
 Files that tools return by URL with `toolOutputPart.fileUrl` are not staged: the model provider reads the URL directly. See [Send a file by URL](/docs/tools#send-a-file-by-url).
 
-Before every model call, eve reads the referenced files back from the sandbox. Every file, whether attached to a message or returned by a tool, reaches the model with a label that names its sandbox path, such as `Attached file /workspace/.eve/attachments/<hash>/report.csv (text/csv)`. The agent can open that path with `read_file` or `bash`. The file's bytes follow its label only when every major provider reads the format natively:
+Every file, whether attached to a message or returned by a tool, reaches the model on every call with a label that names its sandbox path, such as `Attached file /workspace/.eve/attachments/<hash>/report.csv (text/csv)`. The agent can open that path with `read_file` or `bash`. The file's bytes follow its label only when every major provider reads the format natively:
 
 - A PNG, JPEG, GIF, or WebP image up to 3 MiB and at most 8000 pixels per side.
 - A PDF up to 20 MiB.
@@ -167,7 +149,7 @@ Other files, such as CSV, HEIC, audio, and video, reach the model as the label a
 
 To let the agent answer voice notes and other audio, add a tool that transcribes the staged file. See [Voice notes](/docs/patterns/voice-notes).
 
-If a referenced file is missing, or its bytes no longer match what eve staged because something in the sandbox overwrote it, the model receives a `FileNotFound` note in its place.
+eve keeps the bytes of recent images and PDFs it staged or read for a session in memory, so preparing a model call's attachments resumes the sandbox only when it needs bytes that eve doesn't already hold. If a file read back from the sandbox is missing, or its bytes no longer match what eve staged because something in the sandbox overwrote it, the model receives a `FileNotFound` note in its place.
 
 A file that eve can't stage never enters session history. When a channel's `fetchFile` fails, or a file part's `data` is not bytes, base64, a `data:` URL, or a URL, the model receives a note that names the file instead.
 
