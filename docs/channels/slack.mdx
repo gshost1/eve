@@ -105,15 +105,14 @@ Message hooks return `{ auth }` to dispatch, `null` to drop, `{ auth, context }`
 - `onMessage(ctx, message)` handles newly posted Slack messages. eve drops messages authored by the installed app before this hook runs, preventing self-reply loops. Messages from other bots remain visible; check `message.author?.isBot` when those should also be ignored. `ctx.isBotMentioned()` and `ctx.isSubscribed()` support mention and active-thread policies.
 - `onAppMention(ctx, message)` handles only `app_mention` and takes precedence over `onMessage`. Its default derives workspace-scoped auth.
 - `onDirectMessage(ctx, message)` handles only DMs and takes precedence over `onMessage`. Bot-authored messages and edits are filtered first; Slack requires `message.im` and `im:history`.
-- `onCodeChannelMessage(ctx, message)` handles messages in a [code channel](#serve-slack-code-channels) that don't mention the bot. It needs `codeChannels: true`.
 
-| Incoming event                    | Handler order                                                                        |
-| --------------------------------- | ------------------------------------------------------------------------------------ |
-| App mention                       | `onAppMention` → `onMessage` → `onEvent` → built-in mention default                  |
-| Direct message                    | `onDirectMessage` → `onMessage` → `onEvent` → built-in DM default                    |
-| Un-mentioned code channel message | `onCodeChannelMessage` → `onMessage` → `onAppMention` → `onEvent` → built-in default |
-| Other Slack message               | `onMessage` → `onEvent` → ignore                                                     |
-| Other Events API event            | `onEvent` → ignore                                                                   |
+| Incoming event                    | Handler order                                                       |
+| --------------------------------- | ------------------------------------------------------------------- |
+| App mention                       | `onAppMention` → `onMessage` → `onEvent` → built-in mention default |
+| Direct message                    | `onDirectMessage` → `onMessage` → `onEvent` → built-in DM default   |
+| Un-mentioned code channel message | `onMessage` → `onAppMention` → `onEvent` → built-in default         |
+| Other Slack message               | `onMessage` → `onEvent` → ignore                                    |
+| Other Events API event            | `onEvent` → ignore                                                  |
 
 Only the first available handler runs. A message hook returning `null` drops the message; it does not continue down the table.
 
@@ -320,9 +319,9 @@ export default slackChannel({
 });
 ```
 
-Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Messages that don't mention the bot go to `onCodeChannelMessage` when you define it, else to `onMessage`, else to `onAppMention`, else the default handler.
+Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Every message in a code channel is addressed to the agent, as a mention is, so `ctx.isBotMentioned()` returns `true` for all of them. Messages that don't mention the bot go to `onMessage` when you define it, else to `onAppMention`, else the default handler, so a mention handler that filters who can reach the agent also filters code channel messages. Without `codeChannels`, eve never looks a channel up and treats a code channel like any other channel.
 
-**`onAppMention` receives code channel messages that don't mention the bot** when you define neither `onCodeChannelMessage` nor `onMessage`; `ctx.isBotMentioned()` returns `false` for them. That way a mention handler that filters who can reach the agent also filters code channel messages. Define `onCodeChannelMessage` to handle them separately, and apply the same access check there. Without `codeChannels`, eve never looks a channel up and treats a code channel like any other channel.
+A code channel session has no single thread, so `ctx.slack.threadTs` is empty, `SlackChannelState.threadTs` and the `threadTs` in the channel's metadata are `null`, and its Slack auth has no `thread_ts`. `ctx.slack.codeChannel` and `codeChannel: true` in state and metadata say it's a code channel. To address its session yourself, such as from a custom `onInteraction` handler, use `slackSessionAddress({ channelId, codeChannel: true })` from `eve/channels/slack`; for a thread, pass `{ channelId, threadTs }`.
 
 The session starts without the origin conversation. When Slack opens a code channel from a message, it posts a quote of that message into the channel. eve skips the quote, so it never starts a turn, and doesn't add it to the session either. The agent sees only messages posted in the code channel.
 

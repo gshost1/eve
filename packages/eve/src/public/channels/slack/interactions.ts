@@ -24,8 +24,8 @@ import {
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
 import {
-  CODE_CHANNEL_THREAD_TS,
   type CodeChannelReplyState,
+  slackSessionAddress,
   isSlackCodeChannel,
 } from "#public/channels/slack/code-channel.js";
 import { dispatchSignInCancel } from "#public/channels/slack/sign-in-cancel.js";
@@ -358,7 +358,7 @@ export async function handleInteractionPost(
           }).request,
         ));
       // A code channel is one session; a card in a thread there still replies in its thread.
-      const threadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : interaction.threadTs;
+      const threadTs = codeChannel ? null : interaction.threadTs;
       const replyThreadTs =
         codeChannel && interaction.threadTs !== customActions[0]!.messageTs
           ? interaction.threadTs
@@ -367,19 +367,24 @@ export async function handleInteractionPost(
         api: deps.api,
         botToken: deps.config.credentials?.botToken,
         channelId: interaction.channelId,
-        threadTs,
+        threadTs: threadTs ?? "",
+        codeChannel,
         replyThreadTs: () => replyThreadTs,
         installationTeamId: interaction.installationTeamId,
         teamId: interaction.teamId,
       });
       const slackCtx: SlackInteractionContext = {
         ...bindSlackSessionOperations({
-          address: slackContinuationToken(interaction.channelId, threadTs),
+          address: slackSessionAddress({
+            channelId: interaction.channelId,
+            codeChannel,
+            threadTs,
+          }),
           defaultAuth: buildSlackAuthContext({
             channelId: interaction.channelId,
             installationTeamId: interaction.installationTeamId,
             teamId: interaction.teamId,
-            threadTs,
+            threadTs: threadTs ?? undefined,
             userId: actionUser.id,
             userName: actionUser.username ?? actionUser.name,
           }),

@@ -16,6 +16,7 @@ import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { SlackHandle } from "#public/channels/slack/api.js";
 import type { BlockKitBlock } from "#public/channels/slack/blocks.js";
 import {
+  CODE_CHANNEL_THREAD_TS,
   type CodeChannelReplyState,
   slackThreadTsParam,
 } from "#public/channels/slack/code-channel.js";
@@ -398,7 +399,10 @@ async function writeTaskCard(
   const audience = normalizeChannelAudience(channel.state.audience);
   const view = taskCardView(turnId, current.turn, { audience });
   const { channelId } = channel.state;
-  const threadTs = (channel.state as CodeChannelReplyState).replyThreadTs ?? channel.state.threadTs;
+  // A code channel's card posts in the thread its turn answers, else top-level.
+  const threadTs = channel.state.codeChannel
+    ? ((channel.state as CodeChannelReplyState).replyThreadTs ?? CODE_CHANNEL_THREAD_TS)
+    : channel.state.threadTs;
   const scheduled = contextStorage.getStore()?.get(ScheduleIdKey) !== undefined;
   const thread = channelId && threadTs && !scheduled ? { channelId, threadTs } : undefined;
   const card = thread === undefined ? null : renderCard(taskCard, view);

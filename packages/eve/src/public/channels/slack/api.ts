@@ -329,8 +329,13 @@ export interface SlackThread {
 export interface SlackHandle {
   /** Slack channel id. */
   readonly channelId: string;
-  /** Slack thread root ts (or the message ts when not in a thread). */
+  /**
+   * Slack thread root ts (or the message ts when not in a thread). Empty in a
+   * code channel, which is one session across its threads.
+   */
   readonly threadTs: string;
+  /** Whether the session serves a Slack code channel. */
+  readonly codeChannel: boolean;
   /** Slack team id, when the inbound event carried one. */
   readonly teamId: string | undefined;
 
@@ -451,7 +456,9 @@ export function buildSlackBinding(input: {
   readonly botUserId?: string;
   readonly channelId: string;
   readonly threadTs: string;
-  /** In a code channel (`threadTs` is `"0"`), the thread replies post in instead of top-level. */
+  /** Binds the code channel `channelId` as its one session; `threadTs` is ignored. */
+  readonly codeChannel?: boolean;
+  /** In a code channel, the thread replies post in instead of top-level. */
   readonly replyThreadTs?: () => string | undefined;
   /**
    * Whether `threadTs` already has replies; Slack hides threaded
@@ -484,14 +491,15 @@ export function buildSlackBinding(input: {
     return response;
   };
   let messages: readonly SlackThreadMessage[] = [];
-  let currentThreadTs = input.threadTs;
+  const codeChannel = input.codeChannel === true;
+  // The address placeholder: a code channel posts top-level and never auto-anchors.
+  let currentThreadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : input.threadTs;
   let threadHasReplies = input.threadHasReplies ?? currentThreadTs !== "";
   let refreshInFlight: Promise<void> | undefined;
 
   // A code channel session posts top-level, or in the thread its current turn answers.
   function postThreadTs(): string {
-    const replyThreadTs =
-      currentThreadTs === CODE_CHANNEL_THREAD_TS ? input.replyThreadTs?.() : undefined;
+    const replyThreadTs = codeChannel ? input.replyThreadTs?.() : undefined;
     return replyThreadTs || currentThreadTs;
   }
 
@@ -527,7 +535,7 @@ export function buildSlackBinding(input: {
     // uncoalesced fetch.
     async function fetchAndReplace(): Promise<void> {
       // A code channel's history is the whole channel, not one thread.
-      if (!input.channelId || !currentThreadTs || currentThreadTs === CODE_CHANNEL_THREAD_TS) {
+      if (!input.channelId || !currentThreadTs || codeChannel) {
         messages = [];
         return;
       }
@@ -562,7 +570,7 @@ export function buildSlackBinding(input: {
     latest: string,
     size: number,
   ): Promise<readonly SlackThreadMessage[] | undefined> {
-    if (!input.channelId || !currentThreadTs || currentThreadTs === CODE_CHANNEL_THREAD_TS) {
+    if (!input.channelId || !currentThreadTs || codeChannel) {
       return undefined;
     }
     let window: Record<string, unknown>[] = [];
@@ -669,7 +677,7 @@ export function buildSlackBinding(input: {
     async startTyping(status) {
       if (!input.channelId || !currentThreadTs) return;
       // Slack shows its own working state while a code channel's session processes.
-      if (currentThreadTs === CODE_CHANNEL_THREAD_TS) {
+      if (codeChannel) {
         await setSlackCodeChannelStatus(request, input.channelId, status ? "processing" : "active");
         return;
       }
@@ -704,8 +712,9 @@ export function buildSlackBinding(input: {
   const slack: SlackHandle = {
     channelId: input.channelId,
     get threadTs() {
-      return currentThreadTs;
+      return codeChannel ? "" : currentThreadTs;
     },
+    codeChannel,
     teamId: input.teamId,
     request,
     uploadFiles,

@@ -3,10 +3,7 @@
  * the last status it set, so a later model step, or a task card post that
  * Slack clears the status for, can show it again instead of a generic line.
  */
-import {
-  CODE_CHANNEL_THREAD_TS,
-  setSlackCodeChannelStatus,
-} from "#public/channels/slack/code-channel.js";
+import { setSlackCodeChannelStatus } from "#public/channels/slack/code-channel.js";
 import {
   SLACK_TYPING_STATUS_MAX_LENGTH,
   truncateTypingStatus,
@@ -73,7 +70,7 @@ export async function hideStatus(channel: SlackEventContext): Promise<void> {
 }
 
 function isCodeChannel(channel: SlackEventContext): boolean {
-  return channel.slack.threadTs === CODE_CHANNEL_THREAD_TS;
+  return channel.slack.codeChannel;
 }
 
 /** Clears the thread status and forgets it: the turn has nothing more to show. */

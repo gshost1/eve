@@ -99,10 +99,9 @@ async function postPublicInputRequests(
 ): Promise<void> {
   const detailsByRequest = new Map<string, string>();
   // A card in a code channel sits outside any thread, so its clicks carry the session's address.
-  const route =
-    channel.slack.threadTs === CODE_CHANNEL_THREAD_TS
-      ? { channelId: channel.slack.channelId, threadTs: CODE_CHANNEL_THREAD_TS }
-      : undefined;
+  const route = channel.slack.codeChannel
+    ? { channelId: channel.slack.channelId, threadTs: CODE_CHANNEL_THREAD_TS }
+    : undefined;
   for (const post of buildInputRequestPosts(requests, route)) {
     const message = await channel.thread.post({ blocks: post.blocks, text: post.text });
     if (post.kind === "details") {

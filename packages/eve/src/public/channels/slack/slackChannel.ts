@@ -47,8 +47,8 @@ import {
 } from "#public/channels/slack/attachments.js";
 import { defaultInputRequestedHandler } from "#public/channels/slack/approval-cards.js";
 import {
-  CODE_CHANNEL_THREAD_TS,
   type CodeChannelReplyState,
+  slackSessionAddress,
   isSlackCodeChannel,
   isSlackCodeChannelOriginContext,
   setSlackCodeChannelStatus,
@@ -465,7 +465,10 @@ export interface SlackInboundMessageContext extends SlackContext, SlackSessionOp
   isSubscribed(): Promise<boolean>;
   /** Returns whether the message was posted in a Slack code channel. */
   isCodeChannel(): boolean;
-  /** Returns whether the inbound event explicitly mentions this bot. */
+  /**
+   * Returns whether the message is addressed to this bot: it mentions the bot,
+   * or it was posted in a code channel, where every message is.
+   */
   isBotMentioned(): boolean;
 }
 
@@ -668,10 +671,10 @@ export interface SlackChannelConfig {
 
   /**
    * Serves each Slack code channel as one session and answers every message in
-   * it, not just mentions. Un-mentioned messages go to `onCodeChannelMessage`,
-   * else `onMessage`, else `onAppMention`, else the default handler. Adds the
-   * code channel scopes,
-   * events, and feature flag to the app manifest. Without it, eve treats a
+   * it, not just mentions: every message there is addressed to the agent, so
+   * `ctx.isBotMentioned()` returns `true`. Un-mentioned messages go to
+   * `onMessage`, else `onAppMention`, else the default handler. Adds the code
+   * channel scopes, events, and feature flag to the app manifest. Without it, eve treats a
    * code channel like any other channel and never looks one up.
    */
   readonly codeChannels?: boolean;
@@ -701,18 +704,6 @@ export interface SlackChannelConfig {
    * channel messages are ignored when this hook is omitted.
    */
   onMessage?(ctx: SlackInboundMessageContext, message: SlackMessage): SlackInboundResultOrPromise;
-
-  /**
-   * Handles a message in a Slack code channel that doesn't mention the bot.
-   * Requires `codeChannels: true`. Without it, such a message goes to
-   * `onMessage`, else to `onAppMention` (where `ctx.isBotMentioned()` returns
-   * `false`), else the default handler, so an `onAppMention` access check
-   * still applies. A message that mentions the bot goes to `onAppMention`.
-   */
-  onCodeChannelMessage?(
-    ctx: SlackInboundMessageContext,
-    message: SlackMessage,
-  ): SlackInboundResultOrPromise;
 
   /**
    * Invoked when a Slack `app_mention` event arrives (only `app_mention`;
@@ -845,6 +836,7 @@ function rebuildSlackContext(
     botToken: credentials?.botToken,
     channelId: state.channelId ?? "",
     threadTs: state.threadTs ?? "",
+    codeChannel: state.codeChannel === true,
     // Read at post time: `deliver` may move replies to a new thread after the context is built.
     replyThreadTs: () => (state as CodeChannelReplyState).replyThreadTs ?? undefined,
     installationTeamId: state.installationTeamId ?? undefined,
@@ -950,7 +942,7 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
       return {
         channelId: state.channelId,
         teamId: state.teamId,
-        threadTs: state.threadTs,
+        threadTs: state.codeChannel === true ? null : state.threadTs,
         triggeringUserId: state.triggeringUserId ?? null,
       };
     },
@@ -1183,7 +1175,9 @@ async function handleEventPost(input: {
       if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
         return new Response("ok");
       }
-      const source = input.from(slackContinuationToken(stoppedChannelId, CODE_CHANNEL_THREAD_TS));
+      const source = input.from(
+        slackSessionAddress({ channelId: stoppedChannelId, codeChannel: true }),
+      );
       input.waitUntil(
         (async () => {
           const result = await source.cancel();
@@ -1221,7 +1215,6 @@ async function handleEventPost(input: {
         api: input.api,
         appId,
         botUserId,
-        codeChannelHandler: config.onCodeChannelMessage,
         codeChannelOnly,
         detectCodeChannels: config.codeChannels === true,
         receivingBotUserId,
@@ -1265,8 +1258,7 @@ async function handleEventPost(input: {
   }
 
   // Slack asks agents to answer in a code channel without a mention. Every message
-  // there is addressed to the agent, so without `onCodeChannelMessage` an authored
-  // mention handler still gates it.
+  // there is addressed to the agent, so an authored mention handler gates it.
   if (dispatch === null && builtinDefault === null && config.codeChannels === true) {
     const message = parseMessageEvent(envelope);
     if (
@@ -1276,9 +1268,9 @@ async function handleEventPost(input: {
       !isSlackCodeChannelOriginContext(message.raw) &&
       (botUserId === undefined || !message.text.includes(`<@${botUserId}`))
     ) {
-      const handler = config.onCodeChannelMessage ?? config.onAppMention;
-      if (handler !== undefined) {
-        dispatch = dispatchMessage("channel_message", message, handler, true);
+      const onAppMention = config.onAppMention;
+      if (onAppMention !== undefined) {
+        dispatch = dispatchMessage("channel_message", message, onAppMention, true);
       } else {
         builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, true);
       }
@@ -1348,8 +1340,6 @@ async function dispatchSlackMessage(input: {
   readonly api: SlackTransportOptions | undefined;
   readonly appId: string | undefined;
   readonly botUserId: string | undefined;
-  /** Handles an un-mentioned message the channel finds is in a code channel. */
-  readonly codeChannelHandler: SlackChannelConfig["onCodeChannelMessage"];
   /** Drops the message unless it was posted in a code channel. */
   readonly codeChannelOnly: boolean;
   readonly detectCodeChannels: boolean;
@@ -1385,17 +1375,22 @@ async function dispatchSlackMessage(input: {
     (await isSlackCodeChannel(input.message.channelId, conversationRequest));
   if (!codeChannel && input.codeChannelOnly) return;
   // A code channel is one session: every message in it, threaded or not, shares its address.
-  const threadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : input.message.threadTs;
+  const threadTs = codeChannel ? null : input.message.threadTs;
   const isThreadReply = input.message.threadTs !== input.message.ts;
   const replyThreadTs = codeChannel && isThreadReply ? input.message.threadTs : null;
-  const continuationToken = slackContinuationToken(input.message.channelId, threadTs);
+  const continuationToken = slackSessionAddress({
+    channelId: input.message.channelId,
+    codeChannel,
+    threadTs,
+  });
   const { thread, slack } = buildSlackBinding({
     api: input.api,
     appId: input.appId,
     botToken: input.credentials?.botToken,
     botUserId: input.botUserId,
     channelId: input.message.channelId,
-    threadTs,
+    threadTs: threadTs ?? "",
+    codeChannel,
     replyThreadTs: () => replyThreadTs ?? undefined,
     threadHasReplies: isThreadReply,
     installationTeamId: input.installationTeamId,
@@ -1421,7 +1416,7 @@ async function dispatchSlackMessage(input: {
             installationTeamId: input.installationTeamId,
             isBot: author.isBot,
             teamId: input.message.teamId,
-            threadTs,
+            threadTs: threadTs ?? undefined,
             userId: author.userId,
             userName: author.userName,
           }),
@@ -1436,8 +1431,10 @@ async function dispatchSlackMessage(input: {
       raw: input.message.raw,
       request: conversationRequest,
     }));
+  // Every message in a code channel is addressed to the agent, as a mention is.
   const isBotMentioned =
     input.kind === "app_mention" ||
+    codeChannel ||
     (input.botUserId !== undefined && input.message.text.includes(`<@${input.botUserId}`));
   const ctx: SlackInboundMessageContext = {
     ...sessionOperations,
@@ -1459,11 +1456,7 @@ async function dispatchSlackMessage(input: {
     : undefined;
   let result;
   try {
-    const handler =
-      codeChannel && input.kind === "channel_message"
-        ? (input.codeChannelHandler ?? input.handler)
-        : input.handler;
-    result = await handler(ctx, input.message);
+    result = await input.handler(ctx, input.message);
   } catch (error) {
     logError(log, `${input.kind} handler failed`, error, {
       channelId: input.message.channelId,

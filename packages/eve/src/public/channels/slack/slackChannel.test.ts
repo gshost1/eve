@@ -2140,7 +2140,7 @@ describe("slackChannel() final reply delivery", () => {
       rootLookup = () => ({ ok: false, error: "message_not_found" });
       const adapter = withState(
         getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
-        { ...THREAD_STATE, codeChannel: true, threadTs: "0" },
+        { ...THREAD_STATE, codeChannel: true, threadTs: null },
       );
       const ctx = buildAdapterContext(adapter, stubAccessor());
 
@@ -6372,7 +6372,7 @@ describe("slackChannel() code channels", () => {
     expect(isCodeChannel).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe("C_CODE_MENTION:0");
-    expect(send.mock.calls[0]![1].state).toMatchObject({ codeChannel: true, threadTs: "0" });
+    expect(send.mock.calls[0]![1].state).toMatchObject({ codeChannel: true, threadTs: null });
     const post = parseSlackRequestBody(slackCalls(fetchMock, "chat.postMessage")[0]![1]);
     expect(post).toMatchObject({ channel: "C_CODE_MENTION", markdown_text: "On it" });
     expect(post.thread_ts).toBeUndefined();
@@ -6426,30 +6426,26 @@ describe("slackChannel() code channels", () => {
     expect(topLevel.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
     // Replies follow the thread the person wrote in.
     expect(threaded.send.mock.calls[0]![1].state).toMatchObject({
+      codeChannel: true,
       replyThreadTs: "1700000000.000100",
-      threadTs: "0",
+      threadTs: null,
     });
     expect(topLevel.send.mock.calls[0]![1].state).toMatchObject({ replyThreadTs: null });
+    // `"0"` stays inside the session address; state and auth report no thread.
+    expect(topLevel.send.mock.calls[0]![1].auth.attributes).not.toHaveProperty("thread_ts");
     expect(originContext.send).not.toHaveBeenCalled();
     expect(ordinary.send).not.toHaveBeenCalled();
   });
 
-  it("sends un-mentioned code channel messages to onCodeChannelMessage first", async () => {
+  // Every message in a code channel is addressed to the bot, so the mention handler gets it.
+  it("sends un-mentioned code channel messages to onAppMention as addressed to the bot", async () => {
     useCodeChannels(["C_CODE_HOOK"]);
     const calls: string[] = [];
     const channel = slackChannel({
       codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
-      onAppMention(_ctx, message) {
-        calls.push(`mention:${message.channelId}`);
-        return { auth: null };
-      },
-      onCodeChannelMessage(ctx, message) {
-        calls.push(`code:${message.channelId}:${String(ctx.isBotMentioned())}`);
-        return { auth: null };
-      },
-      onMessage(_ctx, message) {
-        calls.push(`message:${message.channelId}`);
+      onAppMention(ctx, message) {
+        calls.push(`mention:${message.channelId}:${String(ctx.isBotMentioned())}`);
         return { auth: null };
       },
     });
@@ -6469,11 +6465,7 @@ describe("slackChannel() code channels", () => {
       buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY_HOOK", user: "U_ALICE" }) }),
     );
 
-    expect(calls).toEqual([
-      "code:C_CODE_HOOK:false",
-      "mention:C_CODE_HOOK",
-      "message:C_ORDINARY_HOOK",
-    ]);
+    expect(calls).toEqual(["mention:C_CODE_HOOK:true", "mention:C_CODE_HOOK:true"]);
     expect(unmentioned.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_HOOK:0"]);
   });
 
@@ -6667,7 +6659,7 @@ describe("slackChannel() code channels", () => {
     useCodeChannels([]);
     const adapter = withState(
       getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
-      { ...THREAD_STATE, codeChannel: true, threadTs: "0" },
+      { ...THREAD_STATE, codeChannel: true, threadTs: null },
     );
     const ctx = buildAdapterContext(adapter, stubAccessor());
 
@@ -6690,7 +6682,7 @@ describe("slackChannel() code channels", () => {
     useCodeChannels([]);
     const adapter = withState(
       getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
-      { ...THREAD_STATE, codeChannel: true, threadTs: "0" },
+      { ...THREAD_STATE, codeChannel: true, threadTs: null },
     );
     const ctx = buildAdapterContext(adapter, stubAccessor());
     const reply = (turnId: string, sequence: number) =>
@@ -6737,7 +6729,7 @@ describe("slackChannel() code channels", () => {
     useCodeChannels([]);
     const adapter = withState(
       getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
-      { ...THREAD_STATE, codeChannel: true, threadTs: "0" },
+      { ...THREAD_STATE, codeChannel: true, threadTs: null },
     );
     const ctx = buildAdapterContext(adapter, stubAccessor());
 

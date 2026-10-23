@@ -14,6 +14,21 @@ const log = createLogger("slack.code-channel");
 export const CODE_CHANNEL_THREAD_TS = "0";
 
 /**
+ * The address of the eve session that serves a Slack conversation: a thread,
+ * or a whole code channel. Pass it to `from()` or `resolveSession()`, such as
+ * in a custom `onInteraction` handler.
+ */
+export function slackSessionAddress(input: {
+  readonly channelId: string;
+  /** The thread's root ts. Ignored in a code channel. */
+  readonly threadTs?: string | null;
+  readonly codeChannel?: boolean;
+}): string {
+  const threadTs = input.codeChannel === true ? CODE_CHANNEL_THREAD_TS : (input.threadTs ?? "");
+  return `${input.channelId}:${threadTs}`;
+}
+
+/**
  * Reply-thread bookkeeping a code channel session keeps in its Slack channel
  * state. Internal, so it stays off the public `SlackChannelState`.
  */
