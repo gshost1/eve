@@ -7,6 +7,8 @@ interface SlackAuthContextInput {
   /** Workspace whose app installation received the event. Keys the principal when known. */
   readonly installationTeamId?: string | null;
   readonly isBot?: boolean;
+  /** ts of the message that produced this auth; absent for clicks and commands. */
+  readonly messageTs?: string;
   readonly teamId?: string | null;
   /** Thread root ts; omit it in a code channel, which is one session across its threads. */
   readonly threadTs?: string;
@@ -56,6 +58,7 @@ export function buildSlackAuthContext(input: SlackAuthContextInput): SessionAuth
   if (input.userName) attributes.user_name = input.userName;
   if (input.fullName) attributes.full_name = input.fullName;
   if (input.teamId) attributes.team_id = input.teamId;
+  if (input.messageTs) attributes.message_ts = input.messageTs;
 
   return {
     attributes,

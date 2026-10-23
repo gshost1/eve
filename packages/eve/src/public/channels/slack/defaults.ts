@@ -185,6 +185,7 @@ export function defaultSlackAuth(
     fullName: author.fullName,
     installationTeamId: message.installationTeamId,
     isBot: author.isBot,
+    messageTs: message.ts,
     teamId: message.teamId,
     threadTs: ctx.slack.threadTs,
     userId: author.userId,
