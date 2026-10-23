@@ -208,7 +208,7 @@ export default defineMcpClientConnection({
   description: "Linear workspace.",
   auth: { getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }) },
   approval: ({ toolName }) =>
-    toolName === "linear__delete_issue" ? "user-approval" : "not-applicable",
+    toolName === "linear__delete_comment" ? "user-approval" : "not-applicable",
 });
 ```
 
