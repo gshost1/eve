@@ -30,7 +30,9 @@ import {
   buildSlackBinding,
   buildSlackWorkspaceHandle,
   fetchSlackThreadWindow,
+  slackCodeChannelContinuationToken,
   slackContinuationToken,
+  slackSessionToken,
   type SlackBotToken,
   type SlackHandle,
   type SlackThread,
@@ -415,12 +417,20 @@ export type SlackEventRespondFn = <const TResponses extends readonly InputRespon
 ) => ReturnType<SlackSessionOperations["respond"]>;
 
 /**
- * Slack thread identity used by workspace-scoped inbound helpers.
+ * Slack session identity used by workspace-scoped inbound helpers: a thread,
+ * or a code channel, whose one session spans all of its threads.
  */
-export interface SlackSessionTarget {
-  readonly channelId: string;
-  readonly threadTs: string;
-}
+export type SlackSessionTarget =
+  | {
+      readonly channelId: string;
+      readonly threadTs: string;
+      readonly codeChannel?: never;
+    }
+  | {
+      readonly channelId: string;
+      readonly codeChannel: true;
+      readonly threadTs?: never;
+    };
 
 /**
  * Imperative surface handed to `slackChannel({ onEvent })`. Generic Events API
@@ -1181,7 +1191,7 @@ async function handleEventPost(input: {
       if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
         return new Response("ok");
       }
-      const source = input.from(slackContinuationToken(stoppedChannelId, ""));
+      const source = input.from(slackCodeChannelContinuationToken(stoppedChannelId));
       input.waitUntil(
         (async () => {
           const result = await source.cancel();
@@ -1394,7 +1404,9 @@ async function dispatchSlackMessage(input: {
   const threadTs = codeChannel ? "" : input.message.threadTs;
   const isThreadReply = input.message.threadTs !== input.message.ts;
   const replyThreadTs = codeChannel && isThreadReply ? input.message.threadTs : null;
-  const continuationToken = slackContinuationToken(input.message.channelId, threadTs);
+  const continuationToken = codeChannel
+    ? slackCodeChannelContinuationToken(input.message.channelId)
+    : slackContinuationToken(input.message.channelId, threadTs);
   const { thread, slack } = buildSlackBinding({
     api: input.api,
     appId: input.appId,
@@ -1530,16 +1542,14 @@ async function dispatchSlackEvent(input: {
         ? input.envelope.team_id
         : undefined;
   const waitUntilTasks: Promise<unknown>[] = [];
-  const sourceFor = (target: SlackSessionTarget) =>
-    input.from(slackContinuationToken(target.channelId, target.threadTs));
+  const sourceFor = (target: SlackSessionTarget) => input.from(slackSessionToken(target));
   const ctx: SlackInboundEventContext = {
     cancel: ({ target, turnId }) => sourceFor(target).cancel({ turnId }),
     clear: ({ target }) => sourceFor(target).clear(),
     compact: ({ target }) => sourceFor(target).compact(),
     envelope: input.envelope,
     reset: ({ reason, target }) => sourceFor(target).reset({ reason }),
-    resolveSession: ({ target }) =>
-      input.resolveSession(slackContinuationToken(target.channelId, target.threadTs)),
+    resolveSession: ({ target }) => input.resolveSession(slackSessionToken(target)),
     respond: (inputResponses, { auth, target }) =>
       sourceFor(target).respond(inputResponses, {
         auth,

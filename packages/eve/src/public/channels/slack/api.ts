@@ -42,6 +42,7 @@ import {
   slackApiOptions,
   type SlackTransportOptions,
 } from "#public/channels/slack/transport.js";
+import type { SlackSessionTarget } from "#public/channels/slack/slackChannel.js";
 
 const log = createLogger("slack.api");
 
@@ -65,6 +66,30 @@ export type SlackBotToken = string | ((context: SlackBotTokenContext) => string 
  */
 export function slackContinuationToken(channelId: string, threadTs: string): string {
   return `${channelId}:${threadTs}`;
+}
+
+/**
+ * Builds the channel-local continuation token of a code channel's one
+ * session (`code:<channelId>`), which no thread token can collide with.
+ */
+export function slackCodeChannelContinuationToken(channelId: string): string {
+  return `code:${channelId}`;
+}
+
+/** The session `slack` is bound to: its code channel, or its thread. */
+export function slackSessionTargetOf(
+  slack: Pick<SlackHandle, "channelId" | "codeChannel" | "threadTs">,
+): SlackSessionTarget {
+  return slack.codeChannel
+    ? { channelId: slack.channelId, codeChannel: true }
+    : { channelId: slack.channelId, threadTs: slack.threadTs };
+}
+
+/** The continuation token of a thread's or a code channel's session. */
+export function slackSessionToken(target: SlackSessionTarget): string {
+  return target.codeChannel === true
+    ? slackCodeChannelContinuationToken(target.channelId)
+    : slackContinuationToken(target.channelId, target.threadTs);
 }
 
 /**

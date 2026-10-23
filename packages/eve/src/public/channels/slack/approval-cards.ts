@@ -4,6 +4,7 @@
  */
 
 import { createLogger, logError } from "#internal/logging.js";
+import { slackSessionTargetOf } from "#public/channels/slack/api.js";
 import {
   slackUserIdForPrincipal,
   slackUserIdFromAuthContext,
@@ -13,7 +14,6 @@ import {
   decodeHitlActionId,
   renderInputRequestPostParts,
   type SlackHitlRoute,
-  slackHitlRoute,
   type SlackInputRequestPostPart,
 } from "#public/channels/slack/hitl.js";
 import {
@@ -99,7 +99,7 @@ async function postPublicInputRequests(
 ): Promise<void> {
   const detailsByRequest = new Map<string, string>();
   // A card in a code channel sits outside any thread, so its clicks carry the session's address.
-  const route = channel.slack.codeChannel ? slackHitlRoute(channel.slack) : undefined;
+  const route = channel.slack.codeChannel ? slackSessionTargetOf(channel.slack) : undefined;
   for (const post of buildInputRequestPosts(requests, route)) {
     const message = await channel.thread.post({ blocks: post.blocks, text: post.text });
     if (post.kind === "details") {

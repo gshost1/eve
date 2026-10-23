@@ -8,7 +8,7 @@ last_updated: "2026-10-23"
 
 > **AI status:** Written entirely by AI; human review pending.
 
-> **Implementation status:** Phase 1 is partly in. Shipped: detection, `C123:` keying, top-level
+> **Implementation status:** Phase 1 is partly in. Shipped: detection, `code:C123` keying, top-level
 > replies, session status, stop, and `codeChannels: true` for un-mentioned messages and the manifest.
 > Every member can start turns; the `participants` policy (`"owner"`, `"confirm"`) is deferred,
 > since eve can't read a forked channel's owner before dispatch. Replies follow the thread the user
@@ -120,22 +120,23 @@ retried a minute later. Without the option, eve never looks a channel up.
 
 ### Session keying
 
-A code channel is one session. eve keys it by `slackContinuationToken(channelId, "")`
-(`C123:`), not by thread: a channel with no thread is the whole channel. Every message in the
+A code channel is one session. eve keys it by `slackCodeChannelContinuationToken(channelId)`
+(`code:C123`), not by thread, and `SlackSessionTarget` takes `{ channelId, codeChannel: true }`
+for it next to `{ channelId, threadTs }`. Every message in the
 channel, top-level or threaded, resolves to that session. Slack does not allow separate agent
-sessions in a code channel's threads, so this matches Slack's model. The address doesn't collide
-with threadless proactive sessions, which use a random id until their first post anchors them.
+sessions in a code channel's threads, so this matches Slack's model. The prefix can't collide with
+a thread token, which starts with a channel id.
 
 The session has no thread, and nothing user-facing shows a placeholder: `ctx.slack.threadTs` is
 empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. One
 explicit flag says it's a code channel: `codeChannel` in state, read through `ctx.slack.codeChannel`
 in hooks and renderers. The binding skips auto-anchoring, omits `thread_ts`, and reads no thread
-history. Approval cards and modals carry the flag in their route, so an empty thread never stands
-in for it. The channel's tracing metadata repeats it, unlisted, for eve's own tools.
+history. Approval cards, modals, and sign-in prompts route back with a code channel target, so an
+empty thread never stands in for it. The channel's tracing metadata repeats it, unlisted, for eve's own tools.
 
 ### Reply placement
 
-The session address and the reply target are separate. The address is `C123:` for the whole
+The session address and the reply target are separate. The address is `code:C123` for the whole
 channel. Each turn has its own reply target: unset (top-level) when the message that started the
 turn was top-level, and that message's thread when the person wrote in a thread, following
 Slack's "only thread a reply when the user threaded first". A message folded into a running turn
@@ -253,7 +254,7 @@ async execute(input, ctx) {
   private channel before copying anything;
 - passes `session_id`, a digest of the origin channel, origin message, and requester, so one
   requester gets one code channel per message, within Slack's 64 character limit;
-- keys the session by `slackContinuationToken(channelId, "")`, the same address phase 1 uses for
+- keys the session by `slackCodeChannelContinuationToken(channelId)`, the same address phase 1 uses for
   inbound messages, and moves the origin's auth to the code channel (`channel_id`, no
   `thread_ts`), keeping the principal.
 
@@ -433,7 +434,7 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
   message is skipped; status transitions per lifecycle event; `session_id` derivation within 64
   characters; origin eligibility, including Grid DMs marked org-shared; the `unknown_method`
   fallback; permanent error classification; binding signing and rejection of a tampered binding;
-  the `codeChannel` receive target maps to `C123:`.
+  the `codeChannel` receive target maps to `code:C123`.
 - Integration, modeled on #5096's `channel-handoff.integration.test.ts` against the real
   `slackChannel()` with Slack's API mocked: the tool forks a thread into a code channel, the code
   channel session's first model call sees the thread's history, a later message in the code

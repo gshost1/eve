@@ -321,7 +321,7 @@ export default slackChannel({
 
 Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Messages that don't mention the bot go to `onMessage` when you define it, else to `onAppMention`, else the default handler, so a mention handler that filters who can reach the agent also filters code channel messages. `ctx.isBotMentioned()` still returns `true` only for messages that mention the bot; use `ctx.slack.codeChannel` to tell code channel messages apart. Without `codeChannels`, eve never looks a channel up and treats a code channel like any other channel.
 
-A code channel session has no single thread, so `ctx.slack.threadTs` is empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. `ctx.slack.codeChannel` and `codeChannel: true` in state say it's a code channel. To address its session yourself, such as from a custom `onInteraction` handler, pass an empty thread: `slackContinuationToken(channelId, "")`.
+A code channel session has no single thread, so `ctx.slack.threadTs` is empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. `ctx.slack.codeChannel` and `codeChannel: true` in state say it's a code channel. To address its session yourself, target `{ channelId, codeChannel: true }` in `onEvent` operations, or build its continuation token with `slackCodeChannelContinuationToken(channelId)`.
 
 The session starts without the origin conversation. When Slack opens a code channel from a message, it posts a quote of that message into the channel. eve skips the quote, so it never starts a turn, and doesn't add it to the session either. The agent sees only messages posted in the code channel.
 
@@ -372,6 +372,8 @@ await ctx.clear({ target });
 await ctx.reset({ reason: "Start over", target });
 const session = await ctx.resolveSession({ target });
 ```
+
+For a [code channel](#serve-slack-code-channels)'s session, which spans all of its threads, target `{ channelId, codeChannel: true }` in every operation except `send`.
 
 `onEvent` is the raw fallback after the message hooks. If an event is not claimed by `onAppMention`, `onDirectMessage`, or `onMessage`, an authored `onEvent` receives it; otherwise eve applies the built-in mention/DM default or ignores it.
 

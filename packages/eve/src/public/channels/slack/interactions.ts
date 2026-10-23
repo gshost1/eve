@@ -20,7 +20,9 @@ import {
   buildSlackWorkspaceHandle,
   callSlackApi,
   resolveSlackBotToken,
+  slackCodeChannelContinuationToken,
   slackContinuationToken,
+  slackSessionToken,
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
 import { isSlackCodeChannel } from "#public/channels/slack/code-channel.js";
@@ -372,7 +374,9 @@ export async function handleInteractionPost(
       });
       const slackCtx: SlackInteractionContext = {
         ...bindSlackSessionOperations({
-          address: slackContinuationToken(interaction.channelId, threadTs),
+          address: codeChannel
+            ? slackCodeChannelContinuationToken(interaction.channelId)
+            : slackContinuationToken(interaction.channelId, threadTs),
           defaultAuth: buildSlackAuthContext({
             channelId: interaction.channelId,
             installationTeamId: interaction.installationTeamId,
@@ -511,27 +515,25 @@ async function dispatchBlockInputResponses(input: {
   readonly route?: SlackHitlRoute;
   readonly submission: Extract<SlackInputResponseSubmission, { type: "block_actions" }>;
 }): Promise<void> {
-  const channelId = input.route?.channelId ?? input.interaction.channelId;
-  const threadTs = input.route?.threadTs ?? input.interaction.threadTs;
+  const target = input.route ?? {
+    channelId: input.interaction.channelId,
+    threadTs: input.interaction.threadTs,
+  };
   const result = await authorizeInputResponse({
-    channelId,
-    codeChannel: input.route?.codeChannel === true,
     deps: input.deps,
     installationTeamId: input.interaction.installationTeamId,
     submission: input.submission,
+    target,
     teamId: input.interaction.teamId,
-    threadTs,
   });
   if (result === null) return;
 
   const response = await respondOrRetireInactivePrompt(
     () =>
-      input.ctx
-        .from(slackContinuationToken(channelId, threadTs))
-        .respond(input.submission.inputResponses, {
-          auth: result.auth,
-          state: withSlackResponder(undefined, input.submission.user.id),
-        }),
+      input.ctx.from(slackSessionToken(target)).respond(input.submission.inputResponses, {
+        auth: result.auth,
+        state: withSlackResponder(undefined, input.submission.user.id),
+      }),
     {
       retirePrompt: (label) =>
         settleHitlCard(input.interaction, input.deps, { label, text: label }),
@@ -619,15 +621,15 @@ async function openFreeformModal(input: {
     return;
   }
 
-  const channelId = decoded?.route?.channelId ?? input.interaction.channelId;
-  const threadTs = decoded?.route?.threadTs ?? input.interaction.threadTs;
+  const target = decoded.route ?? {
+    channelId: input.interaction.channelId,
+    threadTs: input.interaction.threadTs,
+  };
   const metadata: HitlFreeformModalMetadata = {
-    continuationToken: slackContinuationToken(channelId, threadTs),
-    channelId,
+    ...target,
+    continuationToken: slackSessionToken(target),
     installationTeamId: input.interaction.installationTeamId,
     messageChannelId: input.interaction.channelId,
-    threadTs,
-    ...(decoded.route?.codeChannel === true && { codeChannel: true }),
     messageTs,
     requestId,
   };
@@ -679,9 +681,7 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    typeof metadata.threadTs !== "string" ||
-    // Only a code channel's session has no thread.
-    (metadata.threadTs === "") !== (metadata.codeChannel === true)
+    (metadata.codeChannel !== true && !metadata.threadTs)
   ) {
     return ack;
   }
@@ -737,18 +737,17 @@ async function dispatchViewInputResponse(input: {
   readonly teamId: string | null;
   readonly text: string;
 }): Promise<void> {
+  const { channelId, threadTs } = input.metadata;
   const result = await authorizeInputResponse({
-    channelId: input.metadata.channelId,
-    codeChannel: input.metadata.codeChannel === true,
     deps: input.deps,
     installationTeamId: input.installationTeamId,
     submission: input.submission,
+    target: input.metadata,
     teamId: input.teamId,
-    threadTs: input.metadata.threadTs,
   });
   if (result === null) return;
 
-  const cardChannelId = input.metadata.messageChannelId ?? input.metadata.channelId;
+  const cardChannelId = input.metadata.messageChannelId ?? channelId;
   const response = await respondOrRetireInactivePrompt(
     () =>
       input.ctx.from(input.metadata.continuationToken).respond(input.submission.inputResponses, {
@@ -776,7 +775,7 @@ async function dispatchViewInputResponse(input: {
         installationTeamId: input.installationTeamId,
         teamId: input.teamId ?? undefined,
         // A card routed to another conversation only records the thread it answers.
-        threadTs: cardChannelId === input.metadata.channelId ? input.metadata.threadTs : "",
+        threadTs: cardChannelId === channelId ? (threadTs ?? "") : "",
         userId: input.submission.user.id,
       }),
     ]);

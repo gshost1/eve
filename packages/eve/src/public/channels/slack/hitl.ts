@@ -19,8 +19,8 @@ import {
   truncatePlainText,
   truncateSectionText,
 } from "#public/channels/slack/limits.js";
-import type { SlackHandle } from "#public/channels/slack/api.js";
 import type { BlockKitBlock } from "#public/channels/slack/blocks.js";
+import type { SlackSessionTarget } from "#public/channels/slack/slackChannel.js";
 import {
   type InputRequest,
   type InputResponse,
@@ -65,21 +65,7 @@ const HITL_ROUTE_PREFIX = `${HITL_ACTION_PREFIX}route:`;
 const HITL_CODE_CHANNEL_ROUTE_PREFIX = `${HITL_ACTION_PREFIX}code:`;
 
 /** Slack session a routed HITL widget answers back to. */
-export interface SlackHitlRoute {
-  readonly channelId: string;
-  /** Empty for a code channel, whose one session has no thread. */
-  readonly threadTs: string;
-  readonly codeChannel?: true;
-}
-
-/** The route back to the session `slack` is bound to. */
-export function slackHitlRoute(
-  slack: Pick<SlackHandle, "channelId" | "codeChannel" | "threadTs">,
-): SlackHitlRoute {
-  return slack.codeChannel
-    ? { channelId: slack.channelId, codeChannel: true, threadTs: "" }
-    : { channelId: slack.channelId, threadTs: slack.threadTs };
-}
+export type SlackHitlRoute = SlackSessionTarget;
 
 /**
  * Maximum radio-button option count before the renderer falls back to
@@ -192,7 +178,7 @@ export function decodeHitlActionId(actionId: string): DecodedHitlActionId | null
     encoded = encoded.slice("code:".length);
     const end = encoded.indexOf(":");
     if (end <= 0) return null;
-    route = { channelId: encoded.slice(0, end), codeChannel: true, threadTs: "" };
+    route = { channelId: encoded.slice(0, end), codeChannel: true };
     encoded = encoded.slice(end + 1);
   }
   const button = BUTTON_ACTION_ID_RE.exec(encoded);
@@ -341,19 +327,15 @@ export function formatInputRequestFallbackText(request: InputRequest): string {
  * the modal to the `view_submission` that closes it so the route can
  * deliver the answer back to the right session.
  */
-export interface HitlFreeformModalMetadata {
+export type HitlFreeformModalMetadata = SlackSessionTarget & {
   readonly continuationToken: string;
-  readonly channelId: string;
   /** Workspace whose app installation supplies credentials for modal follow-up API calls. */
   readonly installationTeamId?: string;
-  /** Empty for a code channel, whose one session has no thread. */
-  readonly threadTs: string;
-  readonly codeChannel?: true;
   /** Slack conversation containing the interactive card. */
   readonly messageChannelId?: string;
   readonly messageTs: string;
   readonly requestId: string;
-}
+};
 
 /**
  * Builds the `views.open` payload for the freeform-answer modal. The

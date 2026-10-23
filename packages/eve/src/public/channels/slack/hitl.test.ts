@@ -64,7 +64,7 @@ describe("private HITL routes", () => {
 
   // A code channel's session has no thread, so its route says so instead of leaving it empty.
   it("round-trips a code channel route and rejects an empty thread", () => {
-    const route = { channelId: "C123", codeChannel: true, threadTs: "" } as const;
+    const route = { channelId: "C123", codeChannel: true } as const;
     const blocks = renderInputRequestBlocks(
       makeRequest({ options: [{ id: "yes", label: "Yes" }], requestId: "q_1" }),
       route,

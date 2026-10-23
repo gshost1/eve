@@ -1,6 +1,6 @@
 import { createLogger, logError } from "#internal/logging.js";
-import type { SlackHandle } from "#public/channels/slack/api.js";
-import { renderInputRequestPostParts, slackHitlRoute } from "#public/channels/slack/hitl.js";
+import { slackSessionTargetOf, type SlackHandle } from "#public/channels/slack/api.js";
+import { renderInputRequestPostParts } from "#public/channels/slack/hitl.js";
 import type { SlackPendingApprovalCard } from "#public/channels/slack/slackChannel.js";
 import type { InputRequest } from "#shared/input.js";
 
@@ -20,7 +20,7 @@ export async function deliverPrivateInputRequest(input: {
     throw new Error(`Slack conversations.open failed: ${open.error ?? "unknown_error"}`);
   }
 
-  const parts = renderInputRequestPostParts(input.request, slackHitlRoute(input.slack));
+  const parts = renderInputRequestPostParts(input.request, slackSessionTargetOf(input.slack));
   const postedMessageIds: string[] = [];
 
   try {
