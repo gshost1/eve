@@ -5969,7 +5969,7 @@ describe("slackChannel().receive", () => {
     );
 
     const [continuationToken, input] = send.mock.calls[0]!;
-    expect(continuationToken).toBe("C_CODE_RECEIVE:");
+    expect(continuationToken).toBe("code:C_CODE_RECEIVE");
     expect(input.state).toMatchObject({
       audience: "public",
       channelId: "C_CODE_RECEIVE",
@@ -6026,7 +6026,7 @@ describe("slackChannel().receive", () => {
       mockChannelContext(send),
     );
 
-    expect(send.mock.calls[0]![0]).toBe("C_CODE_ROUTE:");
+    expect(send.mock.calls[0]![0]).toBe("code:C_CODE_ROUTE");
   });
 
   // eve passes the calling session, so a tool can't open a channel from another conversation.
@@ -6605,7 +6605,7 @@ describe("slackChannel() code channels", () => {
       origin_message_ts: "1700000000.000200",
     });
     // Only the code channel gets a turn.
-    expect(send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_OPENED:"]);
+    expect(send.mock.calls.map(([address]) => address)).toEqual(["code:C_CODE_OPENED"]);
     const input = send.mock.calls[0]![1];
     expect(input.state).toMatchObject({
       audience: "public",

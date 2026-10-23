@@ -1279,7 +1279,7 @@ async function openSlackCodeChannel(input: {
     request: input.request,
   });
   return {
-    address: slackContinuationToken(channelId, ""),
+    address: slackCodeChannelContinuationToken(channelId),
     auth: codeChannelAuth(input.auth, channelId),
     channelId,
     state: {
