@@ -1,7 +1,7 @@
 ---
 issue: TBD
 status: in-progress
-last_updated: "2026-10-20"
+last_updated: "2026-10-23"
 ---
 
 # Slack code channels
@@ -127,9 +127,11 @@ sessions in a code channel's threads, so this matches Slack's model. The address
 with threadless proactive sessions, which use a random id until their first post anchors them.
 
 The session has no thread, and nothing user-facing shows a placeholder: `ctx.slack.threadTs` is
-empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. An explicit
-`codeChannel` flag on the binding, state, and auth (`code_channel: "true"`) says it's a code
-channel, so the binding skips auto-anchoring, omits `thread_ts`, and reads no thread history.
+empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. One
+explicit flag says it's a code channel: `codeChannel` in state, read through `ctx.slack.codeChannel`
+in hooks and renderers. The binding skips auto-anchoring, omits `thread_ts`, and reads no thread
+history. Approval cards and modals carry the flag in their route, so an empty thread never stands
+in for it. The channel's tracing metadata repeats it, unlisted, for eve's own tools.
 
 ### Reply placement
 
@@ -149,8 +151,8 @@ be a new writer, and is not part of this plan.
 Slack asks agents to respond in a code channel without a mention. With `codeChannels: true`,
 every human message in a code channel goes to `onMessage`, else `onAppMention`, else the default
 handler, which treats it as a turn the way it treats DMs. An authored mention handler still gates
-who reaches the agent. A new `ctx.isCodeChannel()` helper joins `isDMOrPrivateChannel()`
-and `isSubscribed()`.
+who reaches the agent, and `ctx.slack.codeChannel` tells code channel messages apart. Outside a
+code channel, such a message falls back to `onEvent`, as any other channel message would.
 
 When Slack creates a code channel from an origin message, it posts a context message into the new
 channel that quotes the origin (a block with `block_id: "agent_channel_origin_context"`, with
@@ -216,23 +218,24 @@ Connect connectors need the same scopes and events.
 ```ts
 async execute(input, ctx) {
   "use workflow";
-  const auth = ctx.session.auth.current; // channel_id, thread_ts, message_ts, user_id
-  if (!isSlackMessage(auth)) return { status: "unavailable", reason: "..." };
-  if (auth.attributes.code_channel === "true") return { status: "unavailable", reason: "..." };
+  const slack = ctx.channel.metadata; // channelId, threadTs, triggeringMessageTs, codeChannel
+  if (!isSlackConversation(slack)) return { status: "unavailable", reason: "..." };
+  if (slack.codeChannel === true) return { status: "unavailable", reason: "..." };
   const history = await readTranscript(ctx.session.id); // step
   const { sessionId } = await ctx.sendToChannel<SlackChannel>("slack", input.message, {
-    target: { channelId, codeChannel: { name, originTs: message_ts } },
-    auth,
+    target: { channelId, codeChannel: { name, originTs: slack.triggeringMessageTs } },
+    auth: ctx.session.auth.current,
     history,
   });
   return { status: "opened", sessionId };
 }
 ```
 
-1. **Classify.** eve's Slack auth carries `message_ts`, the exact triggering message, so the
-   channel links to the message that asked for the work, even when it is a thread reply. A code
-   channel session's auth has `code_channel: "true"` from its first turn, so the tool refuses to
-   open a code channel from inside one, as Slack asks.
+1. **Classify.** The Slack channel's metadata names the conversation and the triggering
+   message, so the channel links to the message that asked for the work, even when it is a
+   thread reply. It doesn't depend on the session's auth, so hooks that return their own `auth`
+   keep the tool. A code channel session's metadata has `codeChannel: true` from its first turn,
+   so the tool refuses to open a code channel from inside one, as Slack asks.
 2. **Read the transcript.** Fold the calling session's stream with `transcriptReducer()`, as in
    the fork pattern. It keeps the current turn's user message and
    finished assistant text, and leaves out partial text and tool calls.
@@ -251,8 +254,8 @@ async execute(input, ctx) {
 - passes `session_id`, a digest of the origin channel, origin message, and requester, so one
   requester gets one code channel per message, within Slack's 64 character limit;
 - keys the session by `slackContinuationToken(channelId, "")`, the same address phase 1 uses for
-  inbound messages, and moves the origin's auth to the code channel (`channel_id`,
-  `code_channel: "true"`, no `thread_ts`), keeping the principal.
+  inbound messages, and moves the origin's auth to the code channel (`channel_id`, no
+  `thread_ts`), keeping the principal.
 
 ### Retries and races
 

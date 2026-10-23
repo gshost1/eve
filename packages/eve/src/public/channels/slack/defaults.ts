@@ -181,7 +181,6 @@ export function defaultSlackAuth(
 
   return buildSlackAuthContext({
     channelId: ctx.slack.channelId,
-    codeChannel: ctx.slack.codeChannel,
     fullName: author.fullName,
     installationTeamId: message.installationTeamId,
     isBot: author.isBot,

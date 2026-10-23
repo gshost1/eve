@@ -35,6 +35,7 @@ import {
   isFreeformAction,
   isHitlAction,
   type HitlFreeformModalMetadata,
+  type SlackHitlRoute,
 } from "#public/channels/slack/hitl.js";
 import { readSlackTextObject } from "#public/channels/slack/inbound-content.js";
 import {
@@ -374,7 +375,6 @@ export async function handleInteractionPost(
           address: slackContinuationToken(interaction.channelId, threadTs),
           defaultAuth: buildSlackAuthContext({
             channelId: interaction.channelId,
-            codeChannel,
             installationTeamId: interaction.installationTeamId,
             teamId: interaction.teamId,
             threadTs,
@@ -508,15 +508,14 @@ async function dispatchBlockInputResponses(input: {
   };
   readonly deps: InteractionHandlerDeps;
   readonly interaction: ParsedBlockActionsPayload;
-  readonly route?: { readonly channelId: string; readonly threadTs: string };
+  readonly route?: SlackHitlRoute;
   readonly submission: Extract<SlackInputResponseSubmission, { type: "block_actions" }>;
 }): Promise<void> {
   const channelId = input.route?.channelId ?? input.interaction.channelId;
   const threadTs = input.route?.threadTs ?? input.interaction.threadTs;
   const result = await authorizeInputResponse({
     channelId,
-    // Only a code channel's cards route to an empty thread: its session has none.
-    codeChannel: input.route?.threadTs === "",
+    codeChannel: input.route?.codeChannel === true,
     deps: input.deps,
     installationTeamId: input.interaction.installationTeamId,
     submission: input.submission,
@@ -628,6 +627,7 @@ async function openFreeformModal(input: {
     installationTeamId: input.interaction.installationTeamId,
     messageChannelId: input.interaction.channelId,
     threadTs,
+    ...(decoded.route?.codeChannel === true && { codeChannel: true }),
     messageTs,
     requestId,
   };
@@ -679,8 +679,9 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    // Empty for a code channel, whose session has no thread.
-    typeof metadata.threadTs !== "string"
+    typeof metadata.threadTs !== "string" ||
+    // Only a code channel's session has no thread.
+    (metadata.threadTs === "") !== (metadata.codeChannel === true)
   ) {
     return ack;
   }
@@ -738,7 +739,7 @@ async function dispatchViewInputResponse(input: {
 }): Promise<void> {
   const result = await authorizeInputResponse({
     channelId: input.metadata.channelId,
-    codeChannel: input.metadata.threadTs === "",
+    codeChannel: input.metadata.codeChannel === true,
     deps: input.deps,
     installationTeamId: input.installationTeamId,
     submission: input.submission,

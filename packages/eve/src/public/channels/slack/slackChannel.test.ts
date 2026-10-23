@@ -6356,7 +6356,7 @@ describe("slackChannel() code channels", () => {
       codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
       async onAppMention(ctx) {
-        isCodeChannel = ctx.isCodeChannel();
+        isCodeChannel = ctx.slack.codeChannel;
         await ctx.thread.post("On it");
         return { auth: null };
       },
@@ -6431,9 +6431,8 @@ describe("slackChannel() code channels", () => {
       threadTs: null,
     });
     expect(topLevel.send.mock.calls[0]![1].state).toMatchObject({ replyThreadTs: null });
-    // State and auth report no thread, and the auth marks the code channel.
+    // State and auth report no thread.
     expect(topLevel.send.mock.calls[0]![1].auth.attributes).not.toHaveProperty("thread_ts");
-    expect(topLevel.send.mock.calls[0]![1].auth.attributes).toMatchObject({ code_channel: "true" });
     expect(originContext.send).not.toHaveBeenCalled();
     expect(ordinary.send).not.toHaveBeenCalled();
   });
@@ -6470,13 +6469,40 @@ describe("slackChannel() code channels", () => {
     expect(unmentioned.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_HOOK:"]);
   });
 
+  it("leaves un-mentioned messages outside code channels to onEvent", async () => {
+    useCodeChannels(["C_CODE_ON_EVENT"]);
+    const mentions: string[] = [];
+    const events: string[] = [];
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onAppMention(_ctx, message) {
+        mentions.push(message.channelId);
+        return null;
+      },
+      onEvent(_ctx, event) {
+        events.push(String(event.channel));
+      },
+    });
+
+    for (const id of ["C_CODE_ON_EVENT", "C_ORDINARY_ON_EVENT"]) {
+      await firePost(
+        channel,
+        buildSignedRequest({ body: channelMessage({ channel: id, user: "U_ALICE" }) }),
+      );
+    }
+
+    expect(mentions).toEqual(["C_CODE_ON_EVENT"]);
+    expect(events).toEqual(["C_ORDINARY_ON_EVENT"]);
+  });
+
   it("treats a code channel as an ordinary channel without codeChannels", async () => {
     useCodeChannels(["C_CODE_OFF"]);
     const isCodeChannel = vi.fn();
     const channel = slackChannel({
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
       onAppMention(ctx) {
-        isCodeChannel(ctx.isCodeChannel());
+        isCodeChannel(ctx.slack.codeChannel);
         return null;
       },
     });
@@ -6500,7 +6526,7 @@ describe("slackChannel() code channels", () => {
       codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
       onAppMention(ctx) {
-        isCodeChannel(ctx.isCodeChannel());
+        isCodeChannel(ctx.slack.codeChannel);
         return null;
       },
     });
@@ -6575,9 +6601,14 @@ describe("slackChannel() code channels", () => {
   // A code channel card routes to the channel's session, which has no thread.
   it("answers a code channel's approval card on the channel's session", async () => {
     useCodeChannels(["C_CODE_HITL"]);
+    let codeChannel: boolean | undefined;
     const channel = slackChannel({
       codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onInputResponse(ctx) {
+        codeChannel = ctx.slack.codeChannel;
+        return { auth: ctx.defaultAuth };
+      },
     });
 
     const { send } = await firePost(
@@ -6590,7 +6621,7 @@ describe("slackChannel() code channels", () => {
         message: { ts: "1700000000.000010", blocks: [] },
         actions: [
           {
-            action_id: `${HITL_ACTION_PREFIX}route:C_CODE_HITL::tool-approval:approval_abc123:button:0`,
+            action_id: `${HITL_ACTION_PREFIX}code:C_CODE_HITL:tool-approval:approval_abc123:button:0`,
             text: { type: "plain_text", text: "Approve" },
             value: "approve",
           },
@@ -6600,7 +6631,7 @@ describe("slackChannel() code channels", () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalled());
 
     expect(send.mock.calls[0]![0]).toBe("C_CODE_HITL:");
-    expect(send.mock.calls[0]![1].auth.attributes).toMatchObject({ code_channel: "true" });
+    expect(codeChannel).toBe(true);
     expect(send.mock.calls[0]![1].auth.attributes).not.toHaveProperty("thread_ts");
   });
 

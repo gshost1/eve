@@ -13,6 +13,7 @@ import {
   decodeHitlActionId,
   renderInputRequestPostParts,
   type SlackHitlRoute,
+  slackHitlRoute,
   type SlackInputRequestPostPart,
 } from "#public/channels/slack/hitl.js";
 import {
@@ -98,9 +99,7 @@ async function postPublicInputRequests(
 ): Promise<void> {
   const detailsByRequest = new Map<string, string>();
   // A card in a code channel sits outside any thread, so its clicks carry the session's address.
-  const route = channel.slack.codeChannel
-    ? { channelId: channel.slack.channelId, threadTs: "" }
-    : undefined;
+  const route = channel.slack.codeChannel ? slackHitlRoute(channel.slack) : undefined;
   for (const post of buildInputRequestPosts(requests, route)) {
     const message = await channel.thread.post({ blocks: post.blocks, text: post.text });
     if (post.kind === "details") {

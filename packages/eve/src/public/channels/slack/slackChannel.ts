@@ -473,8 +473,6 @@ export interface SlackInboundMessageContext extends SlackContext, SlackSessionOp
   isDMOrPrivateChannel(): Promise<boolean>;
   /** Returns whether this message belongs to a thread with an active eve session. */
   isSubscribed(): Promise<boolean>;
-  /** Returns whether the message was posted in a Slack code channel. */
-  isCodeChannel(): boolean;
   /** Returns whether the inbound event explicitly mentions this bot. */
   isBotMentioned(): boolean;
 }
@@ -950,6 +948,8 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
         teamId: state.teamId,
         threadTs: state.threadTs,
         triggeringUserId: state.triggeringUserId ?? null,
+        // Unlisted in SlackInstrumentationMetadata, so not public API: tools read it to spot a code channel.
+        ...(state.codeChannel === true && { codeChannel: true }),
       };
     },
     audience: ({ state }) => state.audience ?? "unknown",
@@ -1212,7 +1212,7 @@ async function handleEventPost(input: {
       kind: "app_mention" | "channel_message" | "direct_message",
       message: SlackMessage,
       handler: NonNullable<SlackChannelConfig["onMessage"]>,
-      codeChannelOnly = false,
+      codeChannelOnly?: SlackCodeChannelOnly,
     ) =>
     () =>
       dispatchSlackMessage({
@@ -1261,8 +1261,24 @@ async function handleEventPost(input: {
     }
   }
 
+  const onEvent = config.onEvent;
+  const dispatchOnEvent =
+    onEvent === undefined
+      ? undefined
+      : () =>
+          dispatchSlackEvent({
+            api: input.api,
+            from: input.from,
+            resolveSession: input.resolveSession,
+            credentials: config.credentials,
+            envelope,
+            handler: onEvent,
+            installationTeamId,
+          });
+
   // Slack asks agents to answer in a code channel without a mention. Every message
-  // there is addressed to the agent, so an authored mention handler gates it.
+  // there is addressed to the agent, so an authored mention handler gates it. Only the
+  // lookup tells a code channel apart, so a message elsewhere falls back to `onEvent`.
   if (dispatch === null && builtinDefault === null && config.codeChannels === true) {
     const message = parseMessageEvent(envelope);
     if (
@@ -1274,30 +1290,18 @@ async function handleEventPost(input: {
     ) {
       const onAppMention = config.onAppMention;
       if (onAppMention !== undefined) {
-        dispatch = dispatchMessage("channel_message", message, onAppMention, true);
+        dispatch = dispatchMessage("channel_message", message, onAppMention, {
+          otherwise: dispatchOnEvent,
+        });
       } else {
-        builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, true);
+        builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, {});
       }
     }
   }
 
   // Specialized handlers retain their bot/subtype filters. onMessage receives
   // newly posted messages except this app's own; onEvent is the raw fallback.
-  const onEvent = config.onEvent;
-  if (dispatch === null && onEvent !== undefined) {
-    dispatch = () =>
-      dispatchSlackEvent({
-        api: input.api,
-        from: input.from,
-        resolveSession: input.resolveSession,
-        credentials: config.credentials,
-        envelope,
-        handler: onEvent,
-        installationTeamId,
-      });
-  }
-
-  dispatch ??= builtinDefault;
+  dispatch ??= dispatchOnEvent ?? builtinDefault;
   if (dispatch === null) return new Response("ok");
 
   if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) return new Response("ok");
@@ -1340,12 +1344,17 @@ function isSelfAuthoredSlackMessage(
   return identity.appId !== undefined && message.raw.app_id === identity.appId;
 }
 
+/** Limits a message hook to code channels; `otherwise` serves a message posted elsewhere. */
+interface SlackCodeChannelOnly {
+  readonly otherwise?: () => Promise<void>;
+}
+
 async function dispatchSlackMessage(input: {
   readonly api: SlackTransportOptions | undefined;
   readonly appId: string | undefined;
   readonly botUserId: string | undefined;
-  /** Drops the message unless it was posted in a code channel. */
-  readonly codeChannelOnly: boolean;
+  /** Serves the message only when it was posted in a code channel. */
+  readonly codeChannelOnly: SlackCodeChannelOnly | undefined;
   readonly detectCodeChannels: boolean;
   readonly receivingBotUserId: string | undefined;
   readonly from: ChannelFrom<SlackChannelState>;
@@ -1377,7 +1386,10 @@ async function dispatchSlackMessage(input: {
     input.detectCodeChannels &&
     input.kind !== "direct_message" &&
     (await isSlackCodeChannel(input.message.channelId, conversationRequest));
-  if (!codeChannel && input.codeChannelOnly) return;
+  if (!codeChannel && input.codeChannelOnly !== undefined) {
+    await input.codeChannelOnly.otherwise?.();
+    return;
+  }
   // A code channel is one session: every message in it, threaded or not, shares its address.
   const threadTs = codeChannel ? "" : input.message.threadTs;
   const isThreadReply = input.message.threadTs !== input.message.ts;
@@ -1412,7 +1424,6 @@ async function dispatchSlackMessage(input: {
         ? null
         : buildSlackAuthContext({
             channelId: input.message.channelId,
-            codeChannel,
             fullName: author.fullName,
             installationTeamId: input.installationTeamId,
             isBot: author.isBot,
@@ -1438,7 +1449,6 @@ async function dispatchSlackMessage(input: {
   const ctx: SlackInboundMessageContext = {
     ...sessionOperations,
     isBotMentioned: () => isBotMentioned,
-    isCodeChannel: () => codeChannel,
     isDMOrPrivateChannel,
     isSubscribed: async () => (await sessionOperations.resolveSession()) !== undefined,
     slack,
