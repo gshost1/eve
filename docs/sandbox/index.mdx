@@ -52,9 +52,9 @@ export const environment = DefaultSandbox.environment();
 export default defineSandbox(() => environment.open());
 ```
 
-`environment.open()` starts the persistent sandbox owned by the current eve session. The `defineSandbox()` selector runs until initialization succeeds, then eve checkpoints the selected provider and its state. Later workflow steps and process restarts call the provider's `resume()` directly without rerunning the selector or `environment.open()`.
+`environment.open()` starts the persistent sandbox owned by the current eve session. The `defineSandbox()` selector runs until initialization succeeds, then eve checkpoints the selected provider and its state. Later workflow steps and process restarts call the provider's `resume()` directly without rerunning the selector or `environment.open()`. Once a session has recorded its sandbox, eve resumes it in the background when each turn starts, so a tool that uses the sandbox waits only for whatever remains of the resume.
 
-Pass options for the live sandbox to `open()`, then configure the returned sandbox before returning it. `open()` applies its options only when it creates the sandbox. Initialization can run more than once against the same sandbox, for example when a subagent that shares the sandbox opens it before the parent does, when a [workflow step](/docs/tools/workflows#use-the-session-sandbox-in-a-step) opens it before the session records it, or on the next access after an initialization that failed. Make it safe to repeat:
+Pass options for the live sandbox to `open()`, then configure the returned sandbox before returning it. `open()` applies its options only when it creates the sandbox. Initialization can run more than once against the same sandbox, for example when a subagent that shares the sandbox opens it before the parent does, when a [workflow step](/docs/tools/workflows#use-the-session-sandbox-in-a-step) opens it before the session records it, when the first turn of a prewarmed session opens it while prewarming is still starting it, or on the next access after an initialization that failed. Make it safe to repeat:
 
 ```ts
 import { defineSandbox } from "eve/sandbox";
@@ -68,6 +68,8 @@ export default defineSandbox(async ({ session }) => {
   return sandbox;
 });
 ```
+
+When a client prewarms a session, for example with `useEveAgent({ prewarm: true })`, eve runs the selector before the first message arrives. `session.auth` then describes the request that created the session, and the first message's `onMessage` hook can return a different identity. Do not derive per-user sandbox options or `defineState()` values from `session.auth` in an agent whose clients prewarm sessions: eve keeps both from the prewarming run. See [prewarming](/docs/guides/frontend/overview#returned-state) for when eve prewarms a session.
 
 The environment export is required because `eve build` prepares immutable environment inputs before a session exists.
 
@@ -147,7 +149,7 @@ Other files, such as CSV, HEIC, audio, and video, reach the model as the label a
 
 To let the agent answer voice notes and other audio, add a tool that transcribes the staged file. See [Voice notes](/docs/patterns/voice-notes).
 
-eve keeps the bytes of recent images and PDFs it staged or read for a session in memory, so a model call resumes the sandbox only when it needs bytes that eve doesn't already hold. If a file read back from the sandbox is missing, or its bytes no longer match what eve staged because something in the sandbox overwrote it, the model receives a `FileNotFound` note in its place.
+eve keeps the bytes of recent images and PDFs it staged or read for a session in memory, so preparing a model call's attachments resumes the sandbox only when it needs bytes that eve doesn't already hold. If a file read back from the sandbox is missing, or its bytes no longer match what eve staged because something in the sandbox overwrote it, the model receives a `FileNotFound` note in its place.
 
 A file that eve can't stage never enters session history. When a channel's `fetchFile` fails, or a file part's `data` is not bytes, base64, a `data:` URL, or a URL, the model receives a note that names the file instead.
 

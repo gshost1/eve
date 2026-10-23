@@ -255,6 +255,7 @@ catalogs:
 
 overrides:
   '@vercel/cli-config>zod': 4.5.4
+  '@vercel/connect>eve': workspace:*
 
 importers:
 
@@ -1842,7 +1843,7 @@ importers:
         version: 2.8.0
       '@vercel/connect':
         specifier: 'catalog:'
-        version: 2.5.2(@ai-sdk/mcp@2.0.73(zod@4.5.4))(@chat-adapter/slack@4.42.0(ai@7.0.137(zod@4.5.4))(bufferutil@4.1.0)(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(zod@4.5.4))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4))(ai@7.0.137(zod@4.5.4))(eve@0.83.0(@opentelemetry/api@1.9.1)(ai@7.0.137(zod@4.5.4))(braintrust@3.29.0(@aws-sdk/credential-provider-web-identity@3.972.49)(supports-color@10.2.2)(zod@4.5.4))(chat@4.42.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4))(dd-trace@6.13.0)(just-bash@3.1.0(supports-color@10.2.2)))
+        version: 2.5.2(@ai-sdk/mcp@2.0.73(zod@4.5.4))(@chat-adapter/slack@4.42.0(ai@7.0.137(zod@4.5.4))(bufferutil@4.1.0)(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(zod@4.5.4))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4))(ai@7.0.137(zod@4.5.4))(eve@packages+eve)
       '@vercel/detect-agent':
         specifier: 1.2.3
         version: 1.2.3
@@ -7796,7 +7797,7 @@ packages:
       '@chat-adapter/slack': ^4.0.0
       ai: ^6 || ^7.0.0-beta.0
       better-auth: '>=1.5.0'
-      eve: '>=0.13.7'
+      eve: workspace:*
     peerDependenciesMeta:
       '@ai-sdk/mcp':
         optional: true
@@ -7819,7 +7820,7 @@ packages:
       '@chat-adapter/slack': ^4.0.0
       ai: ^6 || ^7.0.0-beta.0
       better-auth: '>=1.5.0'
-      eve: '>=0.13.7'
+      eve: workspace:*
     peerDependenciesMeta:
       '@ai-sdk/mcp':
         optional: true
@@ -7843,7 +7844,7 @@ packages:
       '@modelcontextprotocol/sdk': ^1.29.0
       ai: ^6 || ^7.0.0-beta.0
       better-auth: '>=1.5.0'
-      eve: '>=0.39.1'
+      eve: workspace:*
     peerDependenciesMeta:
       '@ai-sdk/mcp':
         optional: true
@@ -10029,29 +10030,6 @@ packages:
     peerDependencies:
       ai: '>=7.0.0-beta.178'
       eve: '>=0.11.0'
-
-  eve@0.83.0:
-    resolution: {integrity: sha512-qxw8Ck/vBrfIAqgodalXKkpE86eDcydNaJ2ww2AiHVs7CgGCu5qSipr5vOSc4GXkDssbJ9DaV4iVtol2kwV8Hg==}
-    engines: {node: '>=24'}
-    hasBin: true
-    peerDependencies:
-      '@opentelemetry/api': ^1.0.0
-      ai: ^7.0.137
-      braintrust: ^3.0.0
-      chat: ^4.42.0
-      dd-trace: ^6.13.0
-      just-bash: ^3.1.0
-    peerDependenciesMeta:
-      '@opentelemetry/api':
-        optional: true
-      braintrust:
-        optional: true
-      chat:
-        optional: true
-      dd-trace:
-        optional: true
-      just-bash:
-        optional: true
 
   event-target-shim@5.0.1:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
@@ -21727,16 +21705,6 @@ snapshots:
       ai: 7.0.137(zod@4.5.4)
       eve: link:packages/eve
 
-  '@vercel/connect@2.5.2(@ai-sdk/mcp@2.0.73(zod@4.5.4))(@chat-adapter/slack@4.42.0(ai@7.0.137(zod@4.5.4))(bufferutil@4.1.0)(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(zod@4.5.4))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4))(ai@7.0.137(zod@4.5.4))(eve@0.83.0(@opentelemetry/api@1.9.1)(ai@7.0.137(zod@4.5.4))(braintrust@3.29.0(@aws-sdk/credential-provider-web-identity@3.972.49)(supports-color@10.2.2)(zod@4.5.4))(chat@4.42.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4))(dd-trace@6.13.0)(just-bash@3.1.0(supports-color@10.2.2)))':
-    dependencies:
-      '@vercel/oidc': 4.0.1
-    optionalDependencies:
-      '@ai-sdk/mcp': 2.0.73(zod@4.5.4)
-      '@chat-adapter/slack': 4.42.0(ai@7.0.137(zod@4.5.4))(bufferutil@4.1.0)(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(zod@4.5.4)
-      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4)
-      ai: 7.0.137(zod@4.5.4)
-      eve: 0.83.0(@opentelemetry/api@1.9.1)(ai@7.0.137(zod@4.5.4))(braintrust@3.29.0(@aws-sdk/credential-provider-web-identity@3.972.49)(supports-color@10.2.2)(zod@4.5.4))(chat@4.42.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4))(dd-trace@6.13.0)(just-bash@3.1.0(supports-color@10.2.2))
-
   '@vercel/connect@2.5.2(@ai-sdk/mcp@2.0.73(zod@4.5.4))(@chat-adapter/slack@4.42.0(ai@7.0.137(zod@4.5.4))(bufferutil@4.1.0)(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(zod@4.5.4))(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4))(ai@7.0.137(zod@4.5.4))(eve@packages+eve)':
     dependencies:
       '@vercel/oidc': 4.0.1
@@ -24399,19 +24367,6 @@ snapshots:
     dependencies:
       ai: 7.0.137(zod@4.5.4)
       eve: link:packages/eve
-
-  eve@0.83.0(@opentelemetry/api@1.9.1)(ai@7.0.137(zod@4.5.4))(braintrust@3.29.0(@aws-sdk/credential-provider-web-identity@3.972.49)(supports-color@10.2.2)(zod@4.5.4))(chat@4.42.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4))(dd-trace@6.13.0)(just-bash@3.1.0(supports-color@10.2.2)):
-    dependencies:
-      ai: 7.0.137(zod@4.5.4)
-      nitro: 3.0.260903-beta
-      undici: 8.10.2
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      braintrust: 3.29.0(@aws-sdk/credential-provider-web-identity@3.972.49)(supports-color@10.2.2)(zod@4.5.4)
-      chat: 4.42.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4)
-      dd-trace: 6.13.0
-      just-bash: 3.1.0(supports-color@10.2.2)
-    optional: true
 
   event-target-shim@5.0.1: {}
 
