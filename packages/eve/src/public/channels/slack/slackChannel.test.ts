@@ -6440,7 +6440,7 @@ describe("slackChannel() code channels", () => {
     const channel = slackChannel({
       codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
-      onAppMention(ctx, message) {
+      onAppMention(_ctx, message) {
         calls.push(`mention:${message.channelId}`);
         return { auth: null };
       },
