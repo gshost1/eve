@@ -172,7 +172,8 @@ export function decodeHitlActionId(actionId: string): DecodedHitlActionId | null
     encoded = encoded.slice("route:".length);
     const first = encoded.indexOf(":");
     const second = encoded.indexOf(":", first + 1);
-    if (first <= 0 || second <= first + 1) return null;
+    // A code channel session has no thread, so its route's thread is empty.
+    if (first <= 0 || second <= first) return null;
     route = { channelId: encoded.slice(0, first), threadTs: encoded.slice(first + 1, second) };
     encoded = encoded.slice(second + 1);
   }

@@ -3,10 +3,9 @@ import type { SlackHandle } from "#public/channels/slack/api.js";
 import { renderInputRequestPostParts, type SlackHitlRoute } from "#public/channels/slack/hitl.js";
 import type { SlackPendingApprovalCard } from "#public/channels/slack/slackChannel.js";
 import type { InputRequest } from "#shared/input.js";
-import { CODE_CHANNEL_THREAD_TS } from "#public/channels/slack/code-channel.js";
 
 const log = createLogger("slack.private-approval-delivery");
-type PrivateApprovalSlack = Pick<SlackHandle, "channelId" | "codeChannel" | "request" | "threadTs">;
+type PrivateApprovalSlack = Pick<SlackHandle, "channelId" | "request" | "threadTs">;
 
 export async function deliverPrivateInputRequest(input: {
   readonly previewMessageTs: string;
@@ -21,10 +20,9 @@ export async function deliverPrivateInputRequest(input: {
     throw new Error(`Slack conversations.open failed: ${open.error ?? "unknown_error"}`);
   }
 
-  // The buttons carry the session's address, which is the placeholder thread in a code channel.
   const route: SlackHitlRoute = {
     channelId: input.slack.channelId,
-    threadTs: input.slack.codeChannel ? CODE_CHANNEL_THREAD_TS : input.slack.threadTs,
+    threadTs: input.slack.threadTs,
   };
   const parts = renderInputRequestPostParts(input.request, route);
   const postedMessageIds: string[] = [];

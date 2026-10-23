@@ -2135,7 +2135,7 @@ describe("slackChannel() final reply delivery", () => {
       expect(urls()).toEqual(["https://slack.com/api/chat.postMessage"]);
     });
 
-    // A code channel session's thread is the "0" placeholder, which Slack can't look up.
+    // A code channel session has no thread root for Slack to look up.
     it("skips the check in a code channel", async () => {
       rootLookup = () => ({ ok: false, error: "message_not_found" });
       const adapter = withState(
@@ -6371,7 +6371,7 @@ describe("slackChannel() code channels", () => {
 
     expect(isCodeChannel).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]![0]).toBe("C_CODE_MENTION:0");
+    expect(send.mock.calls[0]![0]).toBe("C_CODE_MENTION:");
     expect(send.mock.calls[0]![1].state).toMatchObject({ codeChannel: true, threadTs: null });
     const post = parseSlackRequestBody(slackCalls(fetchMock, "chat.postMessage")[0]![1]);
     expect(post).toMatchObject({ channel: "C_CODE_MENTION", markdown_text: "On it" });
@@ -6422,8 +6422,8 @@ describe("slackChannel() code channels", () => {
       buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY", user: "U_ALICE" }) }),
     );
 
-    expect(threaded.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
-    expect(topLevel.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
+    expect(threaded.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:"]);
+    expect(topLevel.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:"]);
     // Replies follow the thread the person wrote in.
     expect(threaded.send.mock.calls[0]![1].state).toMatchObject({
       codeChannel: true,
@@ -6431,14 +6431,15 @@ describe("slackChannel() code channels", () => {
       threadTs: null,
     });
     expect(topLevel.send.mock.calls[0]![1].state).toMatchObject({ replyThreadTs: null });
-    // `"0"` stays inside the session address; state and auth report no thread.
+    // State and auth report no thread, and the auth marks the code channel.
     expect(topLevel.send.mock.calls[0]![1].auth.attributes).not.toHaveProperty("thread_ts");
+    expect(topLevel.send.mock.calls[0]![1].auth.attributes).toMatchObject({ code_channel: "true" });
     expect(originContext.send).not.toHaveBeenCalled();
     expect(ordinary.send).not.toHaveBeenCalled();
   });
 
-  // Every message in a code channel is addressed to the bot, so the mention handler gets it.
-  it("sends un-mentioned code channel messages to onAppMention as addressed to the bot", async () => {
+  // An authored mention handler gates un-mentioned code channel messages, which don't mention the bot.
+  it("sends un-mentioned code channel messages to onAppMention without counting them as mentions", async () => {
     useCodeChannels(["C_CODE_HOOK"]);
     const calls: string[] = [];
     const channel = slackChannel({
@@ -6465,8 +6466,8 @@ describe("slackChannel() code channels", () => {
       buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY_HOOK", user: "U_ALICE" }) }),
     );
 
-    expect(calls).toEqual(["mention:C_CODE_HOOK:true", "mention:C_CODE_HOOK:true"]);
-    expect(unmentioned.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_HOOK:0"]);
+    expect(calls).toEqual(["mention:C_CODE_HOOK:false", "mention:C_CODE_HOOK:true"]);
+    expect(unmentioned.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_HOOK:"]);
   });
 
   it("treats a code channel as an ordinary channel without codeChannels", async () => {
@@ -6533,7 +6534,7 @@ describe("slackChannel() code channels", () => {
       channel,
       buildSignedRequest({ body: channelMessage({ channel: "C_CODE_GATED", user: "U_ALICE" }) }),
     );
-    expect(alice.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_GATED:0"]);
+    expect(alice.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_GATED:"]);
   });
 
   it("addresses a custom interaction in a code channel to the channel's session", async () => {
@@ -6561,7 +6562,7 @@ describe("slackChannel() code channels", () => {
     await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
 
     expect(cancel).toHaveBeenCalledWith({
-      continuationToken: "C_CODE_CARD:0",
+      continuationToken: "C_CODE_CARD:",
       turnId: "turn_observed",
     });
     // The card sits in a thread, so the reply stays there.
@@ -6569,6 +6570,38 @@ describe("slackChannel() code channels", () => {
       channel: "C_CODE_CARD",
       thread_ts: "1700000000.000001",
     });
+  });
+
+  // A code channel card routes to the channel's session, which has no thread.
+  it("answers a code channel's approval card on the channel's session", async () => {
+    useCodeChannels(["C_CODE_HITL"]);
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+    });
+
+    const { send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        team: { id: "T01" },
+        user: { id: "U01", username: "ada", team_id: "T01" },
+        channel: { id: "C_CODE_HITL" },
+        message: { ts: "1700000000.000010", blocks: [] },
+        actions: [
+          {
+            action_id: `${HITL_ACTION_PREFIX}route:C_CODE_HITL::tool-approval:approval_abc123:button:0`,
+            text: { type: "plain_text", text: "Approve" },
+            value: "approve",
+          },
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(send).toHaveBeenCalled());
+
+    expect(send.mock.calls[0]![0]).toBe("C_CODE_HITL:");
+    expect(send.mock.calls[0]![1].auth.attributes).toMatchObject({ code_channel: "true" });
+    expect(send.mock.calls[0]![1].auth.attributes).not.toHaveProperty("thread_ts");
   });
 
   it("cancels the session's turn when Slack stops the code channel session", async () => {
@@ -6585,7 +6618,7 @@ describe("slackChannel() code channels", () => {
 
     const { cancel, send } = await firePost(channel, buildSignedRequest({ body }));
 
-    expect(cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_STOP:0" });
+    expect(cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_STOP:" });
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -6651,7 +6684,7 @@ describe("slackChannel() code channels", () => {
     const first = await firePost(channel, buildSignedRequest({ body }));
     const redelivered = await firePost(channel, buildSignedRequest({ body }));
 
-    expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_THREAD_STOP:0" });
+    expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_THREAD_STOP:" });
     expect(redelivered.cancel).not.toHaveBeenCalled();
   });
 

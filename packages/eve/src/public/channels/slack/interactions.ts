@@ -23,11 +23,7 @@ import {
   slackContinuationToken,
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
-import {
-  type CodeChannelReplyState,
-  slackSessionAddress,
-  isSlackCodeChannel,
-} from "#public/channels/slack/code-channel.js";
+import { isSlackCodeChannel } from "#public/channels/slack/code-channel.js";
 import { dispatchSignInCancel } from "#public/channels/slack/sign-in-cancel.js";
 import {
   buildFreeformModalView,
@@ -358,7 +354,7 @@ export async function handleInteractionPost(
           }).request,
         ));
       // A code channel is one session; a card in a thread there still replies in its thread.
-      const threadTs = codeChannel ? null : interaction.threadTs;
+      const threadTs = codeChannel ? "" : interaction.threadTs;
       const replyThreadTs =
         codeChannel && interaction.threadTs !== customActions[0]!.messageTs
           ? interaction.threadTs
@@ -367,7 +363,7 @@ export async function handleInteractionPost(
         api: deps.api,
         botToken: deps.config.credentials?.botToken,
         channelId: interaction.channelId,
-        threadTs: threadTs ?? "",
+        threadTs,
         codeChannel,
         replyThreadTs: () => replyThreadTs,
         installationTeamId: interaction.installationTeamId,
@@ -375,16 +371,13 @@ export async function handleInteractionPost(
       });
       const slackCtx: SlackInteractionContext = {
         ...bindSlackSessionOperations({
-          address: slackSessionAddress({
-            channelId: interaction.channelId,
-            codeChannel,
-            threadTs,
-          }),
+          address: slackContinuationToken(interaction.channelId, threadTs),
           defaultAuth: buildSlackAuthContext({
             channelId: interaction.channelId,
+            codeChannel,
             installationTeamId: interaction.installationTeamId,
             teamId: interaction.teamId,
-            threadTs: threadTs ?? undefined,
+            threadTs,
             userId: actionUser.id,
             userName: actionUser.username ?? actionUser.name,
           }),
@@ -394,10 +387,10 @@ export async function handleInteractionPost(
             channelId: interaction.channelId,
             installationTeamId: interaction.installationTeamId ?? null,
             teamId: interaction.teamId ?? null,
-            threadTs,
+            threadTs: threadTs || null,
             triggeringUserId: actionUser.id,
             ...(codeChannel && { codeChannel: true, replyThreadTs: replyThreadTs ?? null }),
-          } satisfies SlackChannelState & CodeChannelReplyState,
+          },
         }),
         thread,
         slack,
@@ -522,6 +515,8 @@ async function dispatchBlockInputResponses(input: {
   const threadTs = input.route?.threadTs ?? input.interaction.threadTs;
   const result = await authorizeInputResponse({
     channelId,
+    // Only a code channel's cards route to an empty thread: its session has none.
+    codeChannel: input.route?.threadTs === "",
     deps: input.deps,
     installationTeamId: input.interaction.installationTeamId,
     submission: input.submission,
@@ -684,7 +679,8 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    !metadata.threadTs
+    // Empty for a code channel, whose session has no thread.
+    typeof metadata.threadTs !== "string"
   ) {
     return ack;
   }
@@ -742,6 +738,7 @@ async function dispatchViewInputResponse(input: {
 }): Promise<void> {
   const result = await authorizeInputResponse({
     channelId: input.metadata.channelId,
+    codeChannel: input.metadata.threadTs === "",
     deps: input.deps,
     installationTeamId: input.installationTeamId,
     submission: input.submission,

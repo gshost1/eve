@@ -3,6 +3,8 @@ import type { SlackChannelState } from "#public/channels/slack/slackChannel.js";
 
 interface SlackAuthContextInput {
   readonly channelId: string;
+  /** Marks the auth as a code channel session's with `code_channel: "true"`. */
+  readonly codeChannel?: boolean;
   readonly fullName?: string;
   /** Workspace whose app installation received the event. Keys the principal when known. */
   readonly installationTeamId?: string | null;
@@ -53,6 +55,7 @@ export function buildSlackAuthContext(input: SlackAuthContextInput): SessionAuth
     user_id: input.userId,
   };
   if (input.threadTs) attributes.thread_ts = input.threadTs;
+  if (input.codeChannel === true) attributes.code_channel = "true";
   if (input.userName) attributes.user_name = input.userName;
   if (input.fullName) attributes.full_name = input.fullName;
   if (input.teamId) attributes.team_id = input.teamId;

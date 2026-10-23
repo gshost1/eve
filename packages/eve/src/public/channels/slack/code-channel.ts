@@ -7,38 +7,6 @@ import type { SlackApiResponse } from "#public/channels/slack/api.js";
 
 const log = createLogger("slack.code-channel");
 
-/**
- * Placeholder thread for a code channel session (`C123:0`). Non-empty, so the
- * binding never auto-anchors on its first post; Slack calls omit `thread_ts`.
- */
-export const CODE_CHANNEL_THREAD_TS = "0";
-
-/**
- * The address of the eve session that serves a Slack conversation: a thread,
- * or a whole code channel. Pass it to `from()` or `resolveSession()`, such as
- * in a custom `onInteraction` handler.
- */
-export function slackSessionAddress(input: {
-  readonly channelId: string;
-  /** The thread's root ts. Ignored in a code channel. */
-  readonly threadTs?: string | null;
-  readonly codeChannel?: boolean;
-}): string {
-  const threadTs = input.codeChannel === true ? CODE_CHANNEL_THREAD_TS : (input.threadTs ?? "");
-  return `${input.channelId}:${threadTs}`;
-}
-
-/**
- * Reply-thread bookkeeping a code channel session keeps in its Slack channel
- * state. Internal, so it stays off the public `SlackChannelState`.
- */
-export interface CodeChannelReplyState {
-  /** The thread of the message the current turn answers; `null` posts top-level. */
-  replyThreadTs?: string | null;
-  /** The thread of the latest delivered message, which the next turn replies in. */
-  pendingReplyThreadTs?: string | null;
-}
-
 type SlackRequest = (operation: string, body: unknown) => Promise<SlackApiResponse>;
 
 const MAX_CACHED_CHANNELS = 1_000;
@@ -132,5 +100,5 @@ export async function setSlackCodeChannelStatus(
 
 /** Slack's `thread_ts` for a session thread: omitted for top-level posts. */
 export function slackThreadTsParam(threadTs: string): string | undefined {
-  return threadTs === "" || threadTs === CODE_CHANNEL_THREAD_TS ? undefined : threadTs;
+  return threadTs === "" ? undefined : threadTs;
 }

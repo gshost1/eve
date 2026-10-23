@@ -75,7 +75,6 @@ export { type SlackFetch, type SlackTransportOptions } from "#public/channels/sl
 
 export { defaultSlackAuth } from "#public/channels/slack/defaults.js";
 export { buildSlackAuthContext } from "#public/channels/slack/auth.js";
-export { slackSessionAddress } from "#public/channels/slack/code-channel.js";
 
 export {
   postCompletedSlackReply,

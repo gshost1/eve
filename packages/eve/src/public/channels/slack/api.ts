@@ -32,7 +32,6 @@ import { createLogger, logError } from "#internal/logging.js";
 import { cardToBlocks, cardToFallbackText } from "#public/channels/slack/blocks.js";
 import { resolveSlackInboundMrkdwn } from "#public/channels/slack/inbound-content.js";
 import {
-  CODE_CHANNEL_THREAD_TS,
   setSlackCodeChannelStatus,
   slackThreadTsParam,
 } from "#public/channels/slack/code-channel.js";
@@ -491,10 +490,11 @@ export function buildSlackBinding(input: {
     return response;
   };
   let messages: readonly SlackThreadMessage[] = [];
+  // A code channel session has no thread: it posts top-level and never anchors one.
   const codeChannel = input.codeChannel === true;
-  // The address placeholder: a code channel posts top-level and never auto-anchors.
-  let currentThreadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : input.threadTs;
-  let threadHasReplies = input.threadHasReplies ?? currentThreadTs !== "";
+  let currentThreadTs = codeChannel ? "" : input.threadTs;
+  const hasSessionThread = () => codeChannel || currentThreadTs !== "";
+  let threadHasReplies = input.threadHasReplies ?? hasSessionThread();
   let refreshInFlight: Promise<void> | undefined;
 
   // A code channel session posts top-level, or in the thread its current turn answers.
@@ -504,7 +504,7 @@ export function buildSlackBinding(input: {
   }
 
   function handleMessageTs(ts: string): void {
-    if (currentThreadTs || ts === currentThreadTs) return;
+    if (hasSessionThread() || ts === currentThreadTs) return;
     currentThreadTs = ts;
     input.onThreadTsChanged?.(ts);
   }
@@ -522,7 +522,7 @@ export function buildSlackBinding(input: {
       initialComment: options?.initialComment,
       threadTs: slackThreadTsParam(threadTs),
     });
-    if (threadTs && channelId === input.channelId && threadTs === currentThreadTs) {
+    if (channelId === input.channelId && hasSessionThread() && threadTs === postThreadTs()) {
       input.onPosted?.();
     }
     return result;
@@ -624,7 +624,7 @@ export function buildSlackBinding(input: {
       if (files.length > 0 && !shouldPostBeforeFiles) {
         const comment = "text" in message ? message.text : undefined;
         const result = await uploadFiles(files, { initialComment: comment });
-        if (currentThreadTs) threadHasReplies = true;
+        if (hasSessionThread()) threadHasReplies = true;
         const id =
           Array.isArray(result.raw.files) && result.raw.files.length > 0
             ? String((result.raw.files[0] as { id?: unknown }).id ?? "")
@@ -637,8 +637,8 @@ export function buildSlackBinding(input: {
         buildPostMessageOptions(message, input.channelId, postThreadTs(), apiOptions),
       );
       const id = response.id;
-      if (replyTo) input.onPosted?.();
-      if (currentThreadTs) threadHasReplies = true;
+      if (replyTo || codeChannel) input.onPosted?.();
+      if (hasSessionThread()) threadHasReplies = true;
       handleMessageTs(id);
 
       // markdown / blocks / card + files: message lands first, then
@@ -675,12 +675,13 @@ export function buildSlackBinding(input: {
       return { id: response.id, raw: response.raw };
     },
     async startTyping(status) {
-      if (!input.channelId || !currentThreadTs) return;
+      if (!input.channelId) return;
       // Slack shows its own working state while a code channel's session processes.
       if (codeChannel) {
         await setSlackCodeChannelStatus(request, input.channelId, status ? "processing" : "active");
         return;
       }
+      if (!currentThreadTs) return;
       try {
         const normalizedStatus = status === undefined ? "" : truncateTypingStatus(status);
         const body: Record<string, unknown> = {
@@ -712,7 +713,7 @@ export function buildSlackBinding(input: {
   const slack: SlackHandle = {
     channelId: input.channelId,
     get threadTs() {
-      return codeChannel ? "" : currentThreadTs;
+      return currentThreadTs;
     },
     codeChannel,
     teamId: input.teamId,

@@ -13,6 +13,7 @@ const log = createLogger("slack.interactions");
 
 export async function authorizeInputResponse(input: {
   readonly channelId: string;
+  readonly codeChannel?: boolean;
   readonly deps: {
     readonly api: SlackTransportOptions | undefined;
     readonly config: SlackChannelConfig;
@@ -25,6 +26,7 @@ export async function authorizeInputResponse(input: {
 }): Promise<SlackInputResponseResult> {
   const defaultAuth = buildSlackAuthContext({
     channelId: input.channelId,
+    codeChannel: input.codeChannel,
     installationTeamId: input.installationTeamId,
     teamId: input.teamId,
     threadTs: input.threadTs,
@@ -36,6 +38,7 @@ export async function authorizeInputResponse(input: {
     botToken: input.deps.config.credentials?.botToken,
     channelId: input.channelId,
     threadTs: input.threadTs,
+    codeChannel: input.codeChannel,
     installationTeamId: input.installationTeamId ?? undefined,
     teamId: input.teamId ?? undefined,
   });

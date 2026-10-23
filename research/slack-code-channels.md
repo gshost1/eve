@@ -8,7 +8,7 @@ last_updated: "2026-10-20"
 
 > **AI status:** Written entirely by AI; human review pending.
 
-> **Implementation status:** Phase 1 is partly in. Shipped: detection, `C123:0` keying, top-level
+> **Implementation status:** Phase 1 is partly in. Shipped: detection, `C123:` keying, top-level
 > replies, session status, stop, and `codeChannels: true` for un-mentioned messages and the manifest.
 > Every member can start turns; the `participants` policy (`"owner"`, `"confirm"`) is deferred,
 > since eve can't read a forked channel's owner before dispatch. Replies follow the thread the user
@@ -120,28 +120,27 @@ retried a minute later. Without the option, eve never looks a channel up.
 
 ### Session keying
 
-A code channel is one session. eve keys it by `slackContinuationToken(channelId, "0")`
-(`C123:0`), not by thread. Every message in the channel, top-level or threaded, resolves to that
-session. Slack does not allow separate agent sessions in a code channel's threads, so this matches
-Slack's model.
+A code channel is one session. eve keys it by `slackContinuationToken(channelId, "")`
+(`C123:`), not by thread: a channel with no thread is the whole channel. Every message in the
+channel, top-level or threaded, resolves to that session. Slack does not allow separate agent
+sessions in a code channel's threads, so this matches Slack's model. The address doesn't collide
+with threadless proactive sessions, which use a random id until their first post anchors them.
 
-`"0"` is a placeholder thread, not an empty one. In eve's Slack state, an empty `threadTs` already
-means "not anchored yet: the first post starts a thread". A non-empty placeholder keeps that
-meaning intact and needs no special case in session state. Slack accepts `thread_ts: "0"` on
-`chat.startStream` as "top-level". For other calls, eve's Slack binding omits `thread_ts` when
-the thread is `"0"`, and reads channel history with `conversations.history` instead of
-`conversations.replies`.
+The session has no thread, and nothing user-facing shows a placeholder: `ctx.slack.threadTs` is
+empty, `SlackChannelState.threadTs` is `null`, and its Slack auth has no `thread_ts`. An explicit
+`codeChannel` flag on the binding, state, and auth (`code_channel: "true"`) says it's a code
+channel, so the binding skips auto-anchoring, omits `thread_ts`, and reads no thread history.
 
 ### Reply placement
 
-The session address and the reply target are separate. The address is `C123:0` for the whole
+The session address and the reply target are separate. The address is `C123:` for the whole
 channel. Each turn has its own reply target: unset (top-level) when the message that started the
 turn was top-level, and that message's thread when the person wrote in a thread, following
 Slack's "only thread a reply when the user threaded first". A message folded into a running turn
 doesn't move that turn's replies; the target is fixed when the turn starts.
 
 The binding's auto-anchor (adopting the first post as the thread root) never runs in a code
-channel, because `"0"` is a non-empty `threadTs`. Replies go out through `chat.postMessage`
+channel. Replies go out through `chat.postMessage`
 without `thread_ts`, or with the turn's thread. Top-level streaming with `chat.startStream` would
 be a new writer, and is not part of this plan.
 
@@ -219,7 +218,7 @@ async execute(input, ctx) {
   "use workflow";
   const auth = ctx.session.auth.current; // channel_id, thread_ts, message_ts, user_id
   if (!isSlackMessage(auth)) return { status: "unavailable", reason: "..." };
-  if (auth.attributes.thread_ts === "0") return { status: "unavailable", reason: "..." };
+  if (auth.attributes.code_channel === "true") return { status: "unavailable", reason: "..." };
   const history = await readTranscript(ctx.session.id); // step
   const { sessionId } = await ctx.sendToChannel<SlackChannel>("slack", input.message, {
     target: { channelId, codeChannel: { name, originTs: message_ts } },
@@ -232,8 +231,8 @@ async execute(input, ctx) {
 
 1. **Classify.** eve's Slack auth carries `message_ts`, the exact triggering message, so the
    channel links to the message that asked for the work, even when it is a thread reply. A code
-   channel session's auth has `thread_ts: "0"` from its first turn, so the tool refuses to open a
-   code channel from inside one, as Slack asks.
+   channel session's auth has `code_channel: "true"` from its first turn, so the tool refuses to
+   open a code channel from inside one, as Slack asks.
 2. **Read the transcript.** Fold the calling session's stream with `transcriptReducer()`, as in
    the fork pattern. It keeps the current turn's user message and
    finished assistant text, and leaves out partial text and tool calls.
@@ -251,9 +250,9 @@ async execute(input, ctx) {
   private channel before copying anything;
 - passes `session_id`, a digest of the origin channel, origin message, and requester, so one
   requester gets one code channel per message, within Slack's 64 character limit;
-- keys the session by `slackContinuationToken(channelId, "0")`, the same address phase 1 uses for
-  inbound messages, and moves the origin's auth to the code channel (`channel_id`, `thread_ts:
-"0"`), keeping the principal.
+- keys the session by `slackContinuationToken(channelId, "")`, the same address phase 1 uses for
+  inbound messages, and moves the origin's auth to the code channel (`channel_id`,
+  `code_channel: "true"`, no `thread_ts`), keeping the principal.
 
 ### Retries and races
 
@@ -427,11 +426,11 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 ## Validation plan
 
 - Unit: code channel detection and caching; channel-scoped keying for top-level and threaded
-  messages; the `"0"` placeholder omits `thread_ts` and never auto-anchors; Slack's origin context
+  messages; a code channel session omits `thread_ts` and never auto-anchors; Slack's origin context
   message is skipped; status transitions per lifecycle event; `session_id` derivation within 64
   characters; origin eligibility, including Grid DMs marked org-shared; the `unknown_method`
   fallback; permanent error classification; binding signing and rejection of a tampered binding;
-  the `codeChannel` receive target maps to `C123:0`.
+  the `codeChannel` receive target maps to `C123:`.
 - Integration, modeled on #5096's `channel-handoff.integration.test.ts` against the real
   `slackChannel()` with Slack's API mocked: the tool forks a thread into a code channel, the code
   channel session's first model call sees the thread's history, a later message in the code

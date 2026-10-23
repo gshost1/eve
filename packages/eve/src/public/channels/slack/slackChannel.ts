@@ -47,8 +47,6 @@ import {
 } from "#public/channels/slack/attachments.js";
 import { defaultInputRequestedHandler } from "#public/channels/slack/approval-cards.js";
 import {
-  type CodeChannelReplyState,
-  slackSessionAddress,
   isSlackCodeChannel,
   isSlackCodeChannelOriginContext,
   setSlackCodeChannelStatus,
@@ -227,10 +225,22 @@ export interface SlackChannelState {
   audience?: ChannelAudience;
   /** Slack channel id seeded by the inbound mention. */
   channelId: string | null;
-  /** Slack thread root ts. A code channel session uses the placeholder `"0"`. */
+  /** Slack thread root ts; `null` in a code channel, which is one session across its threads. */
   threadTs: string | null;
   /** Whether this session serves a Slack code channel. */
   codeChannel?: boolean;
+  /**
+   * In a code channel, the thread of the message the current turn answers;
+   * `null` posts top-level.
+   * @internal
+   */
+  replyThreadTs?: string | null;
+  /**
+   * In a code channel, the thread of the latest delivered message, which the
+   * next turn replies in.
+   * @internal
+   */
+  pendingReplyThreadTs?: string | null;
   /** Slack team id, when the inbound event carried one. */
   teamId: string | null;
   /** Slack message ts that triggered the active turn. */
@@ -465,10 +475,7 @@ export interface SlackInboundMessageContext extends SlackContext, SlackSessionOp
   isSubscribed(): Promise<boolean>;
   /** Returns whether the message was posted in a Slack code channel. */
   isCodeChannel(): boolean;
-  /**
-   * Returns whether the message is addressed to this bot: it mentions the bot,
-   * or it was posted in a code channel, where every message is.
-   */
+  /** Returns whether the inbound event explicitly mentions this bot. */
   isBotMentioned(): boolean;
 }
 
@@ -671,11 +678,11 @@ export interface SlackChannelConfig {
 
   /**
    * Serves each Slack code channel as one session and answers every message in
-   * it, not just mentions: every message there is addressed to the agent, so
-   * `ctx.isBotMentioned()` returns `true`. Un-mentioned messages go to
-   * `onMessage`, else `onAppMention`, else the default handler. Adds the code
-   * channel scopes, events, and feature flag to the app manifest. Without it, eve treats a
-   * code channel like any other channel and never looks one up.
+   * it, not just mentions. Un-mentioned messages go to `onMessage`, else
+   * `onAppMention` (where `ctx.isBotMentioned()` returns `false`), else the
+   * default handler. Adds the code channel scopes, events, and feature flag to
+   * the app manifest. Without it, eve treats a code channel like any other
+   * channel and never looks one up.
    */
   readonly codeChannels?: boolean;
 
@@ -838,7 +845,7 @@ function rebuildSlackContext(
     threadTs: state.threadTs ?? "",
     codeChannel: state.codeChannel === true,
     // Read at post time: `deliver` may move replies to a new thread after the context is built.
-    replyThreadTs: () => (state as CodeChannelReplyState).replyThreadTs ?? undefined,
+    replyThreadTs: () => state.replyThreadTs ?? undefined,
     installationTeamId: state.installationTeamId ?? undefined,
     teamId: state.teamId ?? undefined,
     onThreadTsChanged(ts) {
@@ -901,10 +908,9 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
           channel.state.triggeringUserId = triggeringUserId;
         }
         // A message folded into a running turn doesn't move that turn's replies.
-        const replies = channel.state as SlackChannelState & CodeChannelReplyState;
-        if (replies.pendingReplyThreadTs !== undefined) {
-          replies.replyThreadTs = replies.pendingReplyThreadTs;
-          replies.pendingReplyThreadTs = undefined;
+        if (channel.state.pendingReplyThreadTs !== undefined) {
+          channel.state.replyThreadTs = channel.state.pendingReplyThreadTs;
+          channel.state.pendingReplyThreadTs = undefined;
         }
         await renderTurnStarted?.(data, channel, ctx);
       },
@@ -942,7 +948,7 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
       return {
         channelId: state.channelId,
         teamId: state.teamId,
-        threadTs: state.codeChannel === true ? null : state.threadTs,
+        threadTs: state.threadTs,
         triggeringUserId: state.triggeringUserId ?? null,
       };
     },
@@ -1175,9 +1181,7 @@ async function handleEventPost(input: {
       if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
         return new Response("ok");
       }
-      const source = input.from(
-        slackSessionAddress({ channelId: stoppedChannelId, codeChannel: true }),
-      );
+      const source = input.from(slackContinuationToken(stoppedChannelId, ""));
       input.waitUntil(
         (async () => {
           const result = await source.cancel();
@@ -1375,32 +1379,28 @@ async function dispatchSlackMessage(input: {
     (await isSlackCodeChannel(input.message.channelId, conversationRequest));
   if (!codeChannel && input.codeChannelOnly) return;
   // A code channel is one session: every message in it, threaded or not, shares its address.
-  const threadTs = codeChannel ? null : input.message.threadTs;
+  const threadTs = codeChannel ? "" : input.message.threadTs;
   const isThreadReply = input.message.threadTs !== input.message.ts;
   const replyThreadTs = codeChannel && isThreadReply ? input.message.threadTs : null;
-  const continuationToken = slackSessionAddress({
-    channelId: input.message.channelId,
-    codeChannel,
-    threadTs,
-  });
+  const continuationToken = slackContinuationToken(input.message.channelId, threadTs);
   const { thread, slack } = buildSlackBinding({
     api: input.api,
     appId: input.appId,
     botToken: input.credentials?.botToken,
     botUserId: input.botUserId,
     channelId: input.message.channelId,
-    threadTs: threadTs ?? "",
+    threadTs,
     codeChannel,
     replyThreadTs: () => replyThreadTs ?? undefined,
     threadHasReplies: isThreadReply,
     installationTeamId: input.installationTeamId,
     teamId: input.message.teamId,
   });
-  const channelState: SlackChannelState & CodeChannelReplyState = {
+  const channelState: SlackChannelState = {
     channelId: input.message.channelId,
     installationTeamId: input.installationTeamId ?? null,
     teamId: input.message.teamId ?? null,
-    threadTs,
+    threadTs: threadTs || null,
     triggeringMessageTs: input.message.ts,
     triggeringUserId: author?.userId ?? null,
     ...(codeChannel && { codeChannel: true, replyThreadTs }),
@@ -1412,11 +1412,12 @@ async function dispatchSlackMessage(input: {
         ? null
         : buildSlackAuthContext({
             channelId: input.message.channelId,
+            codeChannel,
             fullName: author.fullName,
             installationTeamId: input.installationTeamId,
             isBot: author.isBot,
             teamId: input.message.teamId,
-            threadTs: threadTs ?? undefined,
+            threadTs,
             userId: author.userId,
             userName: author.userName,
           }),
@@ -1431,10 +1432,8 @@ async function dispatchSlackMessage(input: {
       raw: input.message.raw,
       request: conversationRequest,
     }));
-  // Every message in a code channel is addressed to the agent, as a mention is.
   const isBotMentioned =
     input.kind === "app_mention" ||
-    codeChannel ||
     (input.botUserId !== undefined && input.message.text.includes(`<@${input.botUserId}`));
   const ctx: SlackInboundMessageContext = {
     ...sessionOperations,
@@ -1683,12 +1682,9 @@ function slackTypedText(text: string, botUserId: string | undefined): string {
 }
 
 /** In a code channel, the next turn replies in the thread of the latest message delivered. */
-function followReplyThread(
-  state: SlackChannelState & CodeChannelReplyState,
-  payload: DeliverPayload,
-): void {
+function followReplyThread(state: SlackChannelState, payload: DeliverPayload): void {
   if (payload.message === undefined || state.codeChannel !== true) return;
-  const stamped = payload.state as CodeChannelReplyState | undefined;
+  const stamped = payload.state as Partial<SlackChannelState> | undefined;
   state.pendingReplyThreadTs = stamped?.replyThreadTs ?? null;
 }
 
