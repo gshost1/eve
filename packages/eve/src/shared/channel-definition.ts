@@ -1,3 +1,4 @@
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import { type ChannelCors } from "#channel/cors.js";
 import type { UserContent } from "ai";
 import type { ChannelReceiveContext } from "#channel/channel-operations.js";
@@ -44,6 +45,11 @@ export interface GenericReceiveInput<TReceiveTarget = Record<string, unknown>> {
   readonly message: string | UserContent;
   readonly target: Readonly<TReceiveTarget>;
   readonly auth: SessionAuthContext | null;
+  /**
+   * Prior conversation from the handoff. eve adds it to the session when
+   * `from().send()` passes no `history` of its own.
+   */
+  readonly history?: readonly SessionHistoryMessage[];
 }
 
 /**
