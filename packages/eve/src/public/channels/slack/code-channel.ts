@@ -13,6 +13,17 @@ const log = createLogger("slack.code-channel");
  */
 export const CODE_CHANNEL_THREAD_TS = "0";
 
+/**
+ * Reply-thread bookkeeping a code channel session keeps in its Slack channel
+ * state. Internal, so it stays off the public `SlackChannelState`.
+ */
+export interface CodeChannelReplyState {
+  /** The thread of the message the current turn answers; `null` posts top-level. */
+  replyThreadTs?: string | null;
+  /** The thread of the latest delivered message, which the next turn replies in. */
+  pendingReplyThreadTs?: string | null;
+}
+
 type SlackRequest = (operation: string, body: unknown) => Promise<SlackApiResponse>;
 
 const MAX_CACHED_CHANNELS = 1_000;

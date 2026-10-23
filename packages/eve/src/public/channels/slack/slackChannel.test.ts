@@ -6434,6 +6434,49 @@ describe("slackChannel() code channels", () => {
     expect(ordinary.send).not.toHaveBeenCalled();
   });
 
+  it("sends un-mentioned code channel messages to onCodeChannelMessage first", async () => {
+    useCodeChannels(["C_CODE_HOOK"]);
+    const calls: string[] = [];
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onAppMention(ctx, message) {
+        calls.push(`mention:${message.channelId}`);
+        return { auth: null };
+      },
+      onCodeChannelMessage(ctx, message) {
+        calls.push(`code:${message.channelId}:${String(ctx.isBotMentioned())}`);
+        return { auth: null };
+      },
+      onMessage(_ctx, message) {
+        calls.push(`message:${message.channelId}`);
+        return { auth: null };
+      },
+    });
+
+    const unmentioned = await firePost(
+      channel,
+      buildSignedRequest({ body: channelMessage({ channel: "C_CODE_HOOK", user: "U_ALICE" }) }),
+    );
+    await firePost(
+      channel,
+      buildSignedRequest({
+        body: buildMentionBody({ channel: "C_CODE_HOOK", user: "U_ALICE" }).body,
+      }),
+    );
+    await firePost(
+      channel,
+      buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY_HOOK", user: "U_ALICE" }) }),
+    );
+
+    expect(calls).toEqual([
+      "code:C_CODE_HOOK:false",
+      "mention:C_CODE_HOOK",
+      "message:C_ORDINARY_HOOK",
+    ]);
+    expect(unmentioned.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_HOOK:0"]);
+  });
+
   it("treats a code channel as an ordinary channel without codeChannels", async () => {
     useCodeChannels(["C_CODE_OFF"]);
     const isCodeChannel = vi.fn();

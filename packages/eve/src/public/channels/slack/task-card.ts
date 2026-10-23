@@ -15,7 +15,10 @@ import { createLogger, logError } from "#internal/logging.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { SlackHandle } from "#public/channels/slack/api.js";
 import type { BlockKitBlock } from "#public/channels/slack/blocks.js";
-import { slackThreadTsParam } from "#public/channels/slack/code-channel.js";
+import {
+  type CodeChannelReplyState,
+  slackThreadTsParam,
+} from "#public/channels/slack/code-channel.js";
 import { truncateMessageText } from "#public/channels/slack/limits.js";
 import type { SlackTaskCard } from "#public/channels/slack/renderers.js";
 import { restoreStatus } from "#public/channels/slack/thread-status.js";
@@ -395,7 +398,7 @@ async function writeTaskCard(
   const audience = normalizeChannelAudience(channel.state.audience);
   const view = taskCardView(turnId, current.turn, { audience });
   const { channelId } = channel.state;
-  const threadTs = channel.state.replyThreadTs ?? channel.state.threadTs;
+  const threadTs = (channel.state as CodeChannelReplyState).replyThreadTs ?? channel.state.threadTs;
   const scheduled = contextStorage.getStore()?.get(ScheduleIdKey) !== undefined;
   const thread = channelId && threadTs && !scheduled ? { channelId, threadTs } : undefined;
   const card = thread === undefined ? null : renderCard(taskCard, view);

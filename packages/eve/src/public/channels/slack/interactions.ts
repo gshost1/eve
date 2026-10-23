@@ -23,7 +23,11 @@ import {
   slackContinuationToken,
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
-import { CODE_CHANNEL_THREAD_TS, isSlackCodeChannel } from "#public/channels/slack/code-channel.js";
+import {
+  CODE_CHANNEL_THREAD_TS,
+  type CodeChannelReplyState,
+  isSlackCodeChannel,
+} from "#public/channels/slack/code-channel.js";
 import { dispatchSignInCancel } from "#public/channels/slack/sign-in-cancel.js";
 import {
   buildFreeformModalView,
@@ -388,7 +392,7 @@ export async function handleInteractionPost(
             threadTs,
             triggeringUserId: actionUser.id,
             ...(codeChannel && { codeChannel: true, replyThreadTs: replyThreadTs ?? null }),
-          },
+          } satisfies SlackChannelState & CodeChannelReplyState,
         }),
         thread,
         slack,
