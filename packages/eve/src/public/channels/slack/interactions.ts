@@ -23,6 +23,7 @@ import {
   slackContinuationToken,
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
+import { CODE_CHANNEL_THREAD_TS, isSlackCodeChannel } from "#public/channels/slack/code-channel.js";
 import { dispatchSignInCancel } from "#public/channels/slack/sign-in-cancel.js";
 import {
   buildFreeformModalView,
@@ -341,22 +342,40 @@ export async function handleInteractionPost(
     const customActions = interaction.actions.filter((a) => !isHitlAction(a.actionId));
     if (customActions.length > 0) {
       const actionUser = customActions[0]!.user;
+      const codeChannel =
+        deps.config.codeChannels === true &&
+        (await isSlackCodeChannel(
+          interaction.channelId,
+          buildSlackWorkspaceHandle({
+            api: deps.api,
+            botToken: deps.config.credentials?.botToken,
+            installationTeamId: interaction.installationTeamId,
+            teamId: interaction.teamId,
+          }).request,
+        ));
+      // A code channel is one session; a card in a thread there still replies in its thread.
+      const threadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : interaction.threadTs;
+      const replyThreadTs =
+        codeChannel && interaction.threadTs !== customActions[0]!.messageTs
+          ? interaction.threadTs
+          : undefined;
       const { thread, slack } = buildSlackBinding({
         api: deps.api,
         botToken: deps.config.credentials?.botToken,
         channelId: interaction.channelId,
-        threadTs: interaction.threadTs,
+        threadTs,
+        replyThreadTs: () => replyThreadTs,
         installationTeamId: interaction.installationTeamId,
         teamId: interaction.teamId,
       });
       const slackCtx: SlackInteractionContext = {
         ...bindSlackSessionOperations({
-          address: slackContinuationToken(interaction.channelId, interaction.threadTs),
+          address: slackContinuationToken(interaction.channelId, threadTs),
           defaultAuth: buildSlackAuthContext({
             channelId: interaction.channelId,
             installationTeamId: interaction.installationTeamId,
             teamId: interaction.teamId,
-            threadTs: interaction.threadTs,
+            threadTs,
             userId: actionUser.id,
             userName: actionUser.username ?? actionUser.name,
           }),
@@ -366,8 +385,9 @@ export async function handleInteractionPost(
             channelId: interaction.channelId,
             installationTeamId: interaction.installationTeamId ?? null,
             teamId: interaction.teamId ?? null,
-            threadTs: interaction.threadTs,
+            threadTs,
             triggeringUserId: actionUser.id,
+            ...(codeChannel && { codeChannel: true, replyThreadTs: replyThreadTs ?? null }),
           },
         }),
         thread,

@@ -12,8 +12,10 @@ import {
   buildAnsweredBlocks,
   decodeHitlActionId,
   renderInputRequestPostParts,
+  type SlackHitlRoute,
   type SlackInputRequestPostPart,
 } from "#public/channels/slack/hitl.js";
+import { CODE_CHANNEL_THREAD_TS } from "#public/channels/slack/code-channel.js";
 import {
   answeredBlocksFromActionBlock,
   type SettledCard,
@@ -96,7 +98,12 @@ async function postPublicInputRequests(
   channel: SlackEventContext,
 ): Promise<void> {
   const detailsByRequest = new Map<string, string>();
-  for (const post of buildInputRequestPosts(requests)) {
+  // A card in a code channel sits outside any thread, so its clicks carry the session's address.
+  const route =
+    channel.slack.threadTs === CODE_CHANNEL_THREAD_TS
+      ? { channelId: channel.slack.channelId, threadTs: CODE_CHANNEL_THREAD_TS }
+      : undefined;
+  for (const post of buildInputRequestPosts(requests, route)) {
     const message = await channel.thread.post({ blocks: post.blocks, text: post.text });
     if (post.kind === "details") {
       if (message.id) {
@@ -214,7 +221,10 @@ async function settleRequest(
  * Slack's block-count cap. Tool input details are posted before interactive
  * approval controls so Slack's callback body cannot grow with the input.
  */
-function buildInputRequestPosts(requests: readonly InputRequest[]): Array<{
+function buildInputRequestPosts(
+  requests: readonly InputRequest[],
+  route: SlackHitlRoute | undefined,
+): Array<{
   blocks: unknown[];
   kind: "controls" | "details";
   requests: InputRequest[];
@@ -223,7 +233,7 @@ function buildInputRequestPosts(requests: readonly InputRequest[]): Array<{
   const details: Array<SlackInputRequestPostPart & { readonly request: InputRequest }> = [];
   const controls: Array<SlackInputRequestPostPart & { readonly request: InputRequest }> = [];
   for (const request of requests) {
-    const parts = renderInputRequestPostParts(request);
+    const parts = renderInputRequestPostParts(request, route);
     if (parts.details) details.push({ ...parts.details, request });
     controls.push({ ...parts.controls, request });
   }

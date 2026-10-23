@@ -1,5 +1,6 @@
 import type { DeliverPayload } from "#channel/types.js";
 import { createLogger, logError } from "#internal/logging.js";
+import { CODE_CHANNEL_THREAD_TS } from "#public/channels/slack/code-channel.js";
 import {
   SLACK_MARKDOWN_TEXT_MAX_LENGTH,
   truncateMessageText,
@@ -149,7 +150,8 @@ export async function deliverCompletedSlackReply(
  */
 async function threadRootIsGone(channel: SlackContext): Promise<boolean> {
   const { channelId, threadTs } = channel.slack;
-  if (!channelId || !threadTs) return false;
+  // A code channel has no session root, and a reply that lands top-level stays in the channel.
+  if (!channelId || !threadTs || threadTs === CODE_CHANNEL_THREAD_TS) return false;
   if ((channel as Partial<SlackChannelContext>).state?.postedInThread === true) return false;
   try {
     const response = await channel.slack.request("chat.getPermalink", {

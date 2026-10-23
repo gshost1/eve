@@ -17,6 +17,7 @@ import {
   formatConnectionDisplayName,
   type ConnectionAuthorizationOutcome,
 } from "#public/channels/slack/connections.js";
+import { CODE_CHANNEL_THREAD_TS } from "#public/channels/slack/code-channel.js";
 import type { SlackMessage } from "#public/channels/slack/inbound.js";
 import { approvalEvents } from "#public/channels/slack/approval-cards.js";
 import { deliverCompletedSlackReply } from "#public/channels/slack/reply-delivery.js";
@@ -269,6 +270,12 @@ export const defaultEvents: SlackChannelInternalEvents = {
     await showStatus(channel, "Thinking...", { force: true });
   },
 
+  // A code channel's session status never times out, so a cancelled turn must
+  // set it back to `active`. Slack's stop also expects this (the Chat SDK does the same).
+  async "turn.cancelled"(_event, channel, _ctx) {
+    await clearStatus(channel);
+  },
+
   // A reply clears the status, but a turn ended by an `endsTurn` tool posts
   // none, and Slack would otherwise show the status until it times out.
   async "turn.completed"(_event, channel, _ctx) {
@@ -354,6 +361,8 @@ export const defaultEvents: SlackChannelInternalEvents = {
   },
 
   async "turn.failed"(event, channel, _ctx) {
+    // A thread's status clears when the error posts; a code channel's session stays `processing`.
+    if (channel.slack.threadTs === CODE_CHANNEL_THREAD_TS) await clearStatus(channel);
     if (event.terminal) return;
     const errorId = extractErrorId(event.details);
     const semanticSummary = extractSemanticErrorSummary(event);
