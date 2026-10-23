@@ -9,8 +9,7 @@ import type {
 
 /**
  * Forks the calling Slack conversation into a new code channel, through the
- * Slack channel that serves this session. Built on public APIs only, so an
- * agent can author a variant with its own inputs and behavior.
+ * Slack channel that serves this session.
  */
 export async function executeOpenCodeChannel(
   input: OpenCodeChannelInput,
@@ -18,24 +17,16 @@ export async function executeOpenCodeChannel(
 ): Promise<OpenCodeChannelOutput> {
   "use workflow";
 
-  // Slack auth names the conversation and the message that triggered the turn.
-  const auth = ctx.session.auth.current;
-  const { name } = ctx.channel;
-  const attributes: Readonly<Record<string, unknown>> =
-    auth?.authenticator === "slack-webhook" ? auth.attributes : {};
-  const { channel_id: channelId, message_ts: messageTs, thread_ts: threadTs } = attributes;
+  // The Slack channel's metadata names the conversation and the message that
+  // triggered the turn, whatever auth the session runs as.
+  const { metadata = {}, name } = ctx.channel;
+  const { channelId, codeChannel, installationTeamId, threadTs, triggeringMessageTs } = metadata;
   // Slack doesn't open a code channel from inside one.
-  if (attributes.code_channel === "true") {
-    return unavailable("This conversation is already a code channel.");
-  }
+  if (codeChannel === true) return unavailable("This conversation is already a code channel.");
   if (name === undefined || typeof channelId !== "string" || typeof threadTs !== "string") {
     return unavailable("This conversation is not a Slack message.");
   }
 
-  // The issuer names the workspace whose installation received the message.
-  const installationTeamId = auth?.issuer?.startsWith("slack:")
-    ? auth.issuer.slice("slack:".length)
-    : undefined;
   const history = await readSessionTranscript(ctx.session.id);
   // Slack refusals fail the call with Slack's error, which the model can relay.
   const { sessionId } = await ctx.sendToChannel<SlackChannel>(name, input.message, {
@@ -45,12 +36,11 @@ export async function executeOpenCodeChannel(
       codeChannel: {
         name: input.name,
         originThreadTs: threadTs,
-        // A turn a click started has no message of its own, so it opens from the thread.
-        originTs: typeof messageTs === "string" ? messageTs : threadTs,
+        originTs: typeof triggeringMessageTs === "string" ? triggeringMessageTs : threadTs,
       },
-      ...(installationTeamId !== undefined && { installationTeamId }),
+      ...(typeof installationTeamId === "string" && { installationTeamId }),
     },
-    auth,
+    auth: ctx.session.auth.current,
     history,
   });
   return { sessionId, status: "opened" };

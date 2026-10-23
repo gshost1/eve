@@ -1488,6 +1488,28 @@ describe("slackChannel() default event handlers", () => {
     expect(ctx.state.slackUsersByPrincipal).toEqual({ "slack:T01:U_ALICE": "U_ALICE" });
   });
 
+  // open_code_channel locates the conversation from this metadata, whatever auth the session has.
+  it("projects the latest delivered message into the channel metadata", async () => {
+    const adapter = withState(getAdapter(slackChannel()), {
+      ...THREAD_STATE,
+      installationTeamId: "T_INSTALL",
+      triggeringMessageTs: "1700000000.000002",
+    });
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+
+    await adapter.deliver!(
+      { message: "And the tests?", state: { triggeringMessageTs: "1700000000.000003" } },
+      ctx,
+    );
+
+    expect(adapter.instrumentation?.metadata?.(ctx.state)).toMatchObject({
+      channelId: "C01",
+      installationTeamId: "T_INSTALL",
+      threadTs: "1700000000.000001",
+      triggeringMessageTs: "1700000000.000003",
+    });
+  });
+
   it("refreshes triggeringUserId from the current Slack caller on every turn", async () => {
     const onTurnStarted = vi.fn();
     const adapter = withState(
@@ -5954,11 +5976,10 @@ describe("slackChannel().receive", () => {
       codeChannel: true,
       threadTs: null,
     });
-    // The first turn already sees it runs in a code channel, which has no thread.
+    // The auth moves to the code channel, which has no thread.
     expect(input.auth.attributes).toEqual({
       author_type: "user",
       channel_id: "C_CODE_RECEIVE",
-      code_channel: "true",
       team_id: "T01",
       user_id: "U_ALICE",
     });
@@ -6595,8 +6616,6 @@ describe("slackChannel() code channels", () => {
     });
     expect(input.auth.attributes).toMatchObject({ channel_id: "C_CODE_OPENED" });
     expect(input.auth.attributes).not.toHaveProperty("thread_ts");
-    expect(input.auth.attributes.message_ts).toBeUndefined();
-    expect(input.auth.attributes.code_channel).toBe("true");
   });
 
   it("answers un-mentioned messages from any member when codeChannels is set", async () => {

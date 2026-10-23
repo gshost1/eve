@@ -1000,7 +1000,10 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
         teamId: state.teamId,
         threadTs: state.threadTs,
         triggeringUserId: state.triggeringUserId ?? null,
-        // Unlisted in SlackInstrumentationMetadata, so not public API: tools read it to spot a code channel.
+        // Unlisted in SlackInstrumentationMetadata, so not public API: open_code_channel locates
+        // the conversation with these whatever auth the session runs as.
+        installationTeamId: state.installationTeamId ?? null,
+        triggeringMessageTs: state.triggeringMessageTs ?? null,
         ...(state.codeChannel === true && { codeChannel: true }),
       };
     },
@@ -1015,6 +1018,7 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
     deliver(payload, channel: SlackChannelContext & { readonly session: SessionHandle }) {
       recordSlackPrincipal(channel.state, channel.session.auth.current, payload);
       followReplyThread(channel.state, payload);
+      followTriggeringMessage(channel.state, payload);
       return defaultDeliverResult(withUndeliveredReplyNote(channel.state, payload));
     },
 
@@ -1298,11 +1302,11 @@ function codeChannelAuth(
   codeChannelId: string,
 ): SessionAuthContext | null {
   if (auth?.authenticator !== "slack-webhook") return auth;
-  // A code channel session has no thread or triggering message of its own.
-  const { message_ts: _messageTs, thread_ts: _threadTs, ...attributes } = auth.attributes;
+  // A code channel session has no thread of its own.
+  const { thread_ts: _threadTs, ...attributes } = auth.attributes;
   return {
     ...auth,
-    attributes: { ...attributes, channel_id: codeChannelId, code_channel: "true" },
+    attributes: { ...attributes, channel_id: codeChannelId },
   };
 }
 
@@ -1620,7 +1624,6 @@ async function dispatchSlackMessage(input: {
           fullName: author.fullName,
           installationTeamId: input.installationTeamId,
           isBot: author.isBot,
-          messageTs: input.message.ts,
           teamId: input.message.teamId,
           threadTs,
           userId: author.userId,
@@ -1956,6 +1959,13 @@ function followReplyThread(state: SlackChannelState, payload: DeliverPayload): v
   if (payload.message === undefined || state.codeChannel !== true) return;
   const stamped = payload.state as Partial<SlackChannelState> | undefined;
   state.pendingReplyThreadTs = stamped?.replyThreadTs ?? null;
+}
+
+/** The latest message delivered is the one the next turn answers. */
+function followTriggeringMessage(state: SlackChannelState, payload: DeliverPayload): void {
+  if (payload.message === undefined) return;
+  const stamped = (payload.state as Partial<SlackChannelState> | undefined)?.triggeringMessageTs;
+  if (typeof stamped === "string") state.triggeringMessageTs = stamped;
 }
 
 /**

@@ -274,16 +274,11 @@ describe("workflow tool channel handoffs", () => {
                 triggeringUserId: "U_ALICE",
               },
             },
+            // The message hook returned its own auth; the tool still finds the conversation.
             "eve.auth": {
-              attributes: {
-                channel_id: "C_ORIGIN",
-                message_ts: "1700000000.000002",
-                thread_ts: "1700000000.000001",
-                user_id: "U_ALICE",
-              },
-              authenticator: "slack-webhook",
-              issuer: "slack:T01",
-              principalId: "slack:T01:U_ALICE",
+              attributes: { email: "alice@example.com" },
+              authenticator: "acme-sso",
+              principalId: "acme:alice",
               principalType: "user",
             },
           },

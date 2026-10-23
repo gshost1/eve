@@ -345,7 +345,7 @@ One person gets one code channel per message. A repeated call for the same messa
 
 #### Build your own code channel tool
 
-`open_code_channel` uses only public APIs, so you can write a variant with your own inputs, description, or behavior. In a [workflow tool](/docs/tools/workflows#start-channel-sessions-ctxsendtochannel), `ctx.channel.name` names the channel serving the conversation, and the session's Slack auth names the conversation and the message that triggered the turn: `channel_id`, `thread_ts`, and `message_ts`. In a code channel, the auth has `code_channel: "true"` and no `thread_ts`. Send to that channel with a `codeChannel` target:
+You can write a variant of `open_code_channel` with your own inputs, description, or behavior. In a [workflow tool](/docs/tools/workflows#start-channel-sessions-ctxsendtochannel), `ctx.channel.name` names the channel serving the conversation, and `ctx.channel.metadata` names the Slack conversation: `channelId` and `threadTs`. In a code channel, `threadTs` is `null`. The metadata doesn't depend on the session's auth, so the tool keeps working when a message hook returns its own `auth`. Send to that channel with a `codeChannel` target:
 
 ```ts title="agent/tools/move_to_code_channel.ts"
 import type { SlackChannel } from "eve/channels/slack";
@@ -357,23 +357,19 @@ export default defineWorkflowTool({
   inputSchema: z.object({ task: z.string() }),
   async execute({ task }, ctx) {
     "use workflow";
-    const auth = ctx.session.auth.current;
-    const { name } = ctx.channel;
-    if (!name || auth?.authenticator !== "slack-webhook") return { status: "unavailable" };
-    const { channel_id: channelId, message_ts: messageTs, thread_ts: threadTs } = auth.attributes;
-    if (typeof channelId !== "string" || typeof threadTs !== "string") {
+    const { metadata, name } = ctx.channel;
+    const channelId = metadata?.channelId;
+    const threadTs = metadata?.threadTs;
+    if (!name || typeof channelId !== "string" || typeof threadTs !== "string") {
       return { status: "unavailable" };
     }
     const { sessionId } = await ctx.sendToChannel<SlackChannel>(name, task, {
       target: {
         channelId,
-        codeChannel: {
-          name: task.slice(0, 80),
-          originThreadTs: threadTs,
-          originTs: typeof messageTs === "string" ? messageTs : threadTs,
-        },
+        // Opens the channel from the thread's root message.
+        codeChannel: { name: task.slice(0, 80), originThreadTs: threadTs, originTs: threadTs },
       },
-      auth,
+      auth: ctx.session.auth.current,
     });
     return { sessionId, status: "opened" };
   },

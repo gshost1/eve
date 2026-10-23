@@ -18,9 +18,10 @@ last_updated: "2026-10-23"
 > plan: a workflow body can't capture factory options, and Slack credentials live on the channel,
 > so the Slack channel's `receive()` opens the code channel (a public `codeChannel` target), and the
 > tool is `openCodeChannel()` from `eve/tools/open_code_channel`, with no options, reaching the Slack
-> channel that serves the calling session by `ctx.channel.name`. It reads the origin message from
-> the session's Slack auth (`message_ts`, `thread_ts`, `code_channel`), and uses only public APIs
-> so authors can build variants. Inbound handlers get
+> channel that serves the calling session by `ctx.channel.name`. It reads the origin conversation
+> from `ctx.channel.metadata`, not the session's auth, so hooks that return their own `auth` keep
+> it; the triggering message, installation workspace, and code channel flag are unlisted metadata
+> fields. Authors can build variants from the public `channelId` and `threadTs`. Inbound handlers get
 > `ctx.openCodeChannel()`. No signed binding yet. Creation sends `origin_channel_id` and `origin_message_ts` and leaves origin
 > eligibility to Slack, per Slack's method docs, then confirms a private origin produced a private
 > channel before copying history. A retried step delivers once; a repeated call delivers again
