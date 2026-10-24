@@ -13,6 +13,7 @@ import {
 } from "#execution/durable-session-store.js";
 import {
   continueSessionUsage,
+  mintRelayedUsageGrant,
   pushSessionUsageContinuation,
 } from "#execution/session-usage-continuation.js";
 import { isSteeringDelivery } from "#execution/session/input-queue.js";
@@ -202,6 +203,11 @@ async function routeProxiedDeliver(
   // The turn owner lives outside this durable step and consumes its result.
   if (published.cancelled) parentAction = { kind: "cancel-turn" };
 
+  // The root mints one grant for the Continues in this payload; below it, the
+  // answer brings the root's grant, and every child it reaches gets that one.
+  const usageGrant =
+    sourceDelivery.usageGrant ??
+    (continued.length === 0 ? undefined : mintRelayedUsageGrant(durableSession, continued));
   const answered: { event: PendingInputBatchEvent; resolutions: InputResolution[] }[] = [];
   for (const child of published.cancelled ? [] : children.values()) {
     if (child.workflowAsk !== undefined) {
@@ -216,6 +222,7 @@ async function routeProxiedDeliver(
         ...sourceDelivery,
         deliveryMetadata: child.metadata.length === 0 ? undefined : child.metadata,
         payloads: child.payloads,
+        ...(usageGrant !== undefined && { usageGrant }),
       };
       const remote = child.remote;
       if (remote !== undefined) {
@@ -250,9 +257,9 @@ async function routeProxiedDeliver(
     ),
   );
   const retired = new Set(answered.flatMap((child) => child.resolutions.map((r) => r.requestId)));
-  // A Continue passing through raises this session's allowance, before the prompts it credits close.
+  // The grant raises this session's allowance before the prompts it credits close.
   const current = readDurableSession(published.sessionState);
-  const session = continueSessionUsage(current, continued);
+  const session = usageGrant === undefined ? current : continueSessionUsage(current, usageGrant);
   if (session !== current && !published.cancelled) {
     await pushSessionUsageContinuation(session);
     published = {

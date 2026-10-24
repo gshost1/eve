@@ -175,7 +175,7 @@ function applyControlMessage(started: StartedWorkflowBody, message: unknown): vo
   }
   if (message.kind === "usage-continued") {
     // Best effort; the step logs what it couldn't deliver.
-    started.continueUsage(message.requestIds).catch(() => {});
+    started.continueUsage(message.grant).catch(() => {});
     return;
   }
   started.control.apply(message);

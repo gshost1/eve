@@ -294,13 +294,11 @@ export class ActiveTurn {
         if (this.cancelsThisTurn(value)) this.abort();
         return false;
       case "usage-continued": {
-        const approval = await applySessionUsageContinuation({
-          ...this.input,
-          requestIds: admitted.requestIds,
-        });
-        if (approval === undefined) return false;
-        this.admitted.add(approval.sequence);
-        return true;
+        const approval = await applySessionUsageContinuation({ ...this.input, ...admitted });
+        for (const admission of [admitted.delivery, approval]) {
+          if (admission !== undefined) this.admitted.add(admission.sequence);
+        }
+        return admitted.delivery !== undefined || approval !== undefined;
       }
       case "consumed":
         return value.kind === "authorization-callback";

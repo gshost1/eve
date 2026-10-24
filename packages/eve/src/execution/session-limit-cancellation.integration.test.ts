@@ -14,6 +14,7 @@ import { workflowEntry } from "#execution/session/entry.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import { defineHook } from "#public/definitions/hook.js";
+import type { SessionUsageGrant } from "#harness/turn-tag-state.js";
 
 /**
  * Declining a session-limit continuation prompt cancels the in-flight turn
@@ -250,17 +251,14 @@ describe("session usage continuation pushed from above", () => {
   };
   const bob: SessionAuthContext = { ...alice, principalId: "bob" };
 
-  async function pushContinuation(
+  async function sendCommand(
     continuationToken: string,
-    requestIds: readonly string[] = ["parent-session:0:limit:usage:0"],
+    command: Record<string, unknown>,
   ): Promise<void> {
     const deadline = Date.now() + 15_000;
     while (true) {
       try {
-        await resumeHook(sessionInboxHookToken(continuationToken), {
-          kind: "usage-continued",
-          requestIds,
-        });
+        await resumeHook(sessionInboxHookToken(continuationToken), command);
         return;
       } catch (error) {
         if (Date.now() > deadline) throw error;
@@ -268,6 +266,11 @@ describe("session usage continuation pushed from above", () => {
       }
     }
   }
+
+  const pushContinuation = (
+    continuationToken: string,
+    grant: SessionUsageGrant = { askers: [], seq: 1 },
+  ) => sendCommand(continuationToken, { grant, kind: "usage-continued" });
 
   async function withAliceSession(
     name: string,
@@ -375,7 +378,8 @@ describe("session usage continuation pushed from above", () => {
       const second = requestIdFromPromptTurn(await stream.nextTurn());
       expect(second).not.toBe(first);
 
-      await pushContinuation(continuationToken, [first]);
+      // The session minted grant 1 for its own Continue, so a copy of it is stale.
+      await pushContinuation(continuationToken, { askers: [{ requestId: first }], seq: 1 });
       await answer("stop", second);
       const stopped = await stream.nextTurn();
 
@@ -384,6 +388,34 @@ describe("session usage continuation pushed from above", () => {
           event.data.resolutions.map((resolution) => resolution.response?.optionId),
         ),
       ).toEqual(["stop"]);
+    });
+  }, 60_000);
+
+  it("takes a forwarded answer before its push, and the push changes nothing", async () => {
+    await withAliceSession("limit-forward-first", async ({ continuationToken, stream }) => {
+      await deliver(continuationToken, { message: "keep going please" }, undefined, alice);
+      const requestId = requestIdFromPromptTurn(await stream.nextTurn());
+      const grant: SessionUsageGrant = { askers: [{ requestId }], seq: 5 };
+
+      await sendCommand(continuationToken, {
+        auth: alice,
+        kind: "deliver",
+        payloads: [{ inputResponses: [{ optionId: "continue", requestId }] }],
+        usageGrant: grant,
+      });
+      const resumed = await stream.nextTurn();
+      expectNoFailureEvents(resumed);
+      expect(filterEventsByType(resumed, "input.requested")).toHaveLength(0);
+      expect(
+        filterEventsByType(resumed, "input.resolved").flatMap((event) =>
+          event.data.resolutions.map((resolution) => resolution.requestId),
+        ),
+      ).toEqual([requestId]);
+
+      // Had the push opened another window, this turn's spend would not ask yet.
+      await pushContinuation(continuationToken, grant);
+      await deliver(continuationToken, { message: "and more" }, undefined, alice);
+      expect(requestIdFromPromptTurn(await stream.nextTurn())).toMatch(/:limit:usage:1$/u);
     });
   }, 60_000);
 

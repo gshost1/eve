@@ -27,9 +27,7 @@ const HARNESS_TURN_USAGE_STATE_KEY = "eve.harness.turnUsage";
 const REPORTED_SESSION_USAGE_STATE_KEY = "eve.harness.reportedSessionUsage";
 const SESSION_USAGE_WINDOW_START_KEY = "eve.harness.sessionUsageWindowStart";
 const SESSION_USAGE_WINDOW_INDEX_KEY = "eve.harness.sessionUsageWindowIndex";
-const SESSION_USAGE_GRANTS_KEY = "eve.harness.sessionUsageGrants";
-// A copy of a grant arrives within moments of the grant; a few windows of memory are plenty.
-const MAX_REMEMBERED_GRANTS = 16;
+const SESSION_USAGE_GRANT_KEY = "eve.harness.sessionUsageGrant";
 
 export interface TokenUsageTotals {
   readonly cacheReadTokens: number;
@@ -103,21 +101,28 @@ export function getSessionUsageWindow(session: Pick<HarnessSession, "state">): T
 }
 
 /**
- * Starts a new usage window after an approved continuation, at the session's
- * totals plus `unreported`: spend its children showed in their prompts but
- * haven't reported yet. `grant` names the prompts the Continue answered; one
- * reaches a session both as the answer and as a push, so a grant naming a
- * prompt the session already granted changes nothing.
+ * One session-limit Continue, minted by the root of the delegation tree that
+ * asked. Every copy of it, forwarded with an answer or pushed to a run, is the
+ * same value, and `seq` only grows within a tree.
+ */
+export interface SessionUsageGrant {
+  readonly seq: number;
+  /** The relayed prompts it approved, with the total each one showed. */
+  readonly askers: readonly { readonly requestId: string; readonly total?: TokenUsageDelta }[];
+}
+
+/**
+ * Starts a new usage window for `grant`, at the session's totals plus
+ * `unreported`: spend its children showed in their prompts but haven't
+ * reported yet. A grant the session already applied, or an older one, changes
+ * nothing.
  */
 export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>(
   session: T,
-  grant: readonly string[],
+  grant: SessionUsageGrant,
   unreported?: TokenUsageDelta,
 ): T {
-  const grants = getGrants(session);
-  if (grant.length === 0 || grants.some((ids) => ids.some((id) => grant.includes(id)))) {
-    return session;
-  }
+  if (grant.seq <= (getSessionUsageGrant(session)?.seq ?? 0)) return session;
   const start = maxTokenUsage(
     addTokenUsage(getSessionTokenUsage(session), toTokenUsageDelta(unreported)),
     getWindowStart(session),
@@ -126,20 +131,26 @@ export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>
     ...session,
     state: {
       ...session.state,
-      [SESSION_USAGE_GRANTS_KEY]: [...grants, grant].slice(-MAX_REMEMBERED_GRANTS),
+      [SESSION_USAGE_GRANT_KEY]: grant,
       [SESSION_USAGE_WINDOW_INDEX_KEY]: getSessionUsageWindowIndex(session) + 1,
       [SESSION_USAGE_WINDOW_START_KEY]: start,
     },
   };
 }
 
-/** The prompts whose Continue started the current window. */
-export function getSessionUsageGrant(session: Pick<HarnessSession, "state">): readonly string[] {
-  return getGrants(session).at(-1) ?? [];
+/** The grant that started the current window. */
+export function getSessionUsageGrant(
+  session: Pick<HarnessSession, "state">,
+): SessionUsageGrant | undefined {
+  return session.state?.[SESSION_USAGE_GRANT_KEY] as SessionUsageGrant | undefined;
 }
 
-function getGrants(session: Pick<HarnessSession, "state">): readonly (readonly string[])[] {
-  return (session.state?.[SESSION_USAGE_GRANTS_KEY] as string[][] | undefined) ?? [];
+/** A new grant at the root of a tree: the one place its grants are minted. */
+export function mintSessionUsageGrant(
+  session: Pick<HarnessSession, "state">,
+  askers: SessionUsageGrant["askers"],
+): SessionUsageGrant {
+  return { askers, seq: (getSessionUsageGrant(session)?.seq ?? 0) + 1 };
 }
 
 /** How many usage windows the session has started before its current one. */

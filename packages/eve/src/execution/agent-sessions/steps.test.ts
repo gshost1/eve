@@ -260,11 +260,14 @@ describe("continueAgentSessionsUsageStep", () => {
       .mockResolvedValueOnce({});
 
     await continueAgentSessionsUsageStep({
-      requestIds: ["asker:0:limit:usage:0"],
+      grant: { askers: [{ requestId: "asker:0:limit:usage:0" }], seq: 1 },
       sessions: [opened("ended"), opened("unreachable"), opened("live")],
     });
 
-    const sent = { kind: "usage-continued", requestIds: ["asker:0:limit:usage:0"] };
+    const sent = {
+      grant: { askers: [{ requestId: "asker:0:limit:usage:0" }], seq: 1 },
+      kind: "usage-continued",
+    };
     expect(mocks.resumeSessionInbox.mock.calls).toEqual([
       ["ended-token", sent],
       ["unreachable-token", sent],

@@ -35,6 +35,7 @@ import { countRunUsage } from "#execution/agent-sessions/usage.js";
 import {
   applySessionUsageContinuationStep,
   continueSessionUsage,
+  mintRelayedUsageGrant,
 } from "#execution/session-usage-continuation.js";
 import { readDurableSession } from "#execution/durable-session-read.js";
 import { applySessionStateDelta } from "#execution/session/state-delta.js";
@@ -42,8 +43,10 @@ import { createTask, readTaskTable, writeTaskTable } from "#execution/tasks/tabl
 import { DEFAULT_SESSION_USAGE_LIMIT } from "#harness/hitl/budget.js";
 import {
   getSessionUsage,
+  getSessionUsageGrant,
   getSessionUsageWindow,
   getSessionUsageWindowIndex,
+  type SessionUsageGrant,
 } from "#harness/turn-tag-state.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { openInputs } from "#protocol/session-projection.js";
@@ -725,10 +728,14 @@ describe("a Continue on a relayed session-limit prompt", () => {
     outputTokens: 0,
   });
 
-  /** A root whose direct child asked at 45M, through a started task run. */
+  /**
+   * A session whose child asked at 45M, through a started task run. With
+   * `runPerPrompt`, each prompt comes through its own run.
+   */
   async function rootWithChildPrompt(input: {
     readonly root: string;
     readonly counted?: TokenUsage;
+    readonly runPerPrompt?: boolean;
     readonly totals?: readonly TokenUsage[];
   }) {
     const f = fixture();
@@ -743,20 +750,25 @@ describe("a Continue on a relayed session-limit prompt", () => {
       }),
     );
     const request = requests[0]!;
-    const created = createTask(readTaskTable(f.durableSession.state), {
-      callId: "child-call",
-      kind: "agent",
-      name: "child",
-      resumable: true,
-      turnId: "parent-turn",
-    });
-    const run = {
-      hookToken: `${input.root}-run-hook`,
-      runId: `${input.root}-run`,
-      started: true,
-      usage: input.counted,
-    };
-    const table = { tasks: created.table.tasks.map((task) => ({ ...task, run })) };
+    const runIdOf = (index: number) =>
+      input.runPerPrompt === true ? `${input.root}-run-${String(index)}` : `${input.root}-run`;
+    const runIds = [...new Set(requests.map((_, index) => runIdOf(index)))];
+    let table = readTaskTable(f.durableSession.state);
+    for (const runId of runIds) {
+      const created = createTask(table, {
+        callId: `${runId}-call`,
+        kind: "agent",
+        name: "child",
+        resumable: true,
+        turnId: "parent-turn",
+      });
+      const run = { hookToken: `${runId}-hook`, runId, started: true, usage: input.counted };
+      table = {
+        tasks: created.table.tasks.map((task) =>
+          task.id === created.taskId ? { ...task, run } : task,
+        ),
+      };
+    }
     const durableSession = writeTaskTable(f.durableSession, table);
     enterSessionProjection(f.ctx, durableSession.state);
     let parked = durableSession;
@@ -774,7 +786,7 @@ describe("a Continue on a relayed session-limit prompt", () => {
           childSessionInbox: { sessionId: "child-session" },
           event: { ...f.hookPayload.event, requests: [next], sequence: index },
         },
-        runId: `${input.root}-run`,
+        runId: runIdOf(index),
       });
       parked = relayed.sessionState.snapshot.session;
     }
@@ -863,7 +875,8 @@ describe("a Continue on a relayed session-limit prompt", () => {
     expect(openInputs(storedProjection(parked.state))).toHaveLength(2);
     expect(readHitlState(parked.state).relays.size).toBe(2);
 
-    const session = continueSessionUsage(parked, [root.request.requestId]);
+    const ids = root.requests.map((request) => request.requestId);
+    const session = continueSessionUsage(parked, mintRelayedUsageGrant(parked, ids));
 
     const reported = countRunUsage(session, usage(60 * M));
     expect(getSessionUsageWindow(reported).inputTokens).toBe(15 * M);
@@ -879,47 +892,126 @@ describe("a Continue on a relayed session-limit prompt", () => {
     expect(getSessionUsageWindow(reported).costUsd).toBe(0);
   });
 
-  describe("grants a Continue once when it reaches a session as both answer and push", () => {
-    async function pushTo(
-      state: {
+  async function pushTo(
+    state: {
+      readonly serializedContext: Record<string, unknown>;
+      readonly sessionState: DurableSessionState;
+    },
+    grant: SessionUsageGrant,
+    answered: readonly string[] = [],
+  ) {
+    const values = { history: [], ...state };
+    const applied = await applySessionUsageContinuationStep({
+      ...state,
+      answered,
+      grant,
+      sessionWritable: new WritableStream(),
+    });
+    return applySessionStateDelta(values, applied.stateDelta);
+  }
+
+  describe("a middle session applies its root's grant once, from whichever copy comes first", () => {
+    // The middle's two leaves asked at 45M and 40M; it counted 10M from each.
+    const middle = () =>
+      rootWithChildPrompt({
+        counted: usage(10 * M),
+        root: "m",
+        runPerPrompt: true,
+        totals: [usage(45 * M), usage(40 * M)],
+      });
+
+    async function receive(
+      events: readonly ("a" | "b" | "push")[],
+      grant?: (root: Awaited<ReturnType<typeof middle>>) => SessionUsageGrant,
+    ) {
+      const root = await middle();
+      const [a, b] = root.requests.map((request) => request.requestId) as [string, string];
+      const minted =
+        grant?.(root) ??
+        ({
+          askers: root.requests.map((request) => ({
+            requestId: request.requestId,
+            total: request.action.input["total"] as TokenUsage,
+          })),
+          seq: 7,
+        } satisfies SessionUsageGrant);
+      let state: {
         readonly serializedContext: Record<string, unknown>;
         readonly sessionState: DurableSessionState;
-      },
-      requestIds: readonly string[],
-    ) {
-      const values = { history: [], ...state };
-      const applied = await applySessionUsageContinuationStep({
-        ...state,
-        requestIds,
-        sessionWritable: new WritableStream(),
-      });
-      return applySessionStateDelta(values, applied.stateDelta);
+      } = root.relayed;
+      for (const event of events) {
+        // A forwarded answer applies its grant on admission, before it routes on.
+        const answered = event === "a" ? [a] : event === "b" ? [b] : [];
+        state = await pushTo(state, minted, answered);
+      }
+      return { minted, session: readDurableSession(state.sessionState) };
     }
 
-    it("answer first, then the push", async () => {
-      const root = await rootWithChildPrompt({ root: "a" });
-      const { next } = await answer(root, continueOn(root.request.requestId, alice));
-      expect(sent.hook).toHaveBeenCalledTimes(1);
+    const orders: (readonly ("a" | "b" | "push")[])[] = [
+      ["a", "b", "push"],
+      ["a", "push", "b"],
+      ["b", "a", "push"],
+      ["b", "push", "a"],
+      ["push", "a", "b"],
+      ["push", "b", "a"],
+      ["a", "a", "push", "b", "push", "b"],
+    ];
+    it.each(orders)("%s, %s, %s", async (...events) => {
+      const { minted, session } = await receive(events);
 
-      const pushed = await pushTo(next, [root.request.requestId]);
-
-      expect(sent.hook).toHaveBeenCalledTimes(1);
-      expect(getSessionUsageWindowIndex(readDurableSession(pushed.sessionState))).toBe(1);
-    });
-
-    it("push first, then the answer", async () => {
-      const root = await rootWithChildPrompt({ root: "a" });
-      const pushed = await pushTo(root.relayed, [root.request.requestId]);
-      expect(sent.hook).toHaveBeenCalledTimes(1);
-
-      const { session } = await answer(
-        { ...root, relayed: { ...root.relayed, ...pushed } },
-        continueOn(root.request.requestId, alice),
-      );
-
-      expect(sent.hook).toHaveBeenCalledTimes(1);
       expect(getSessionUsageWindowIndex(session)).toBe(1);
+      // Start = 0 own + (45M - 10M) + (40M - 10M), so 100M reported later leaves 35M.
+      expect(getSessionUsageWindow(countRunUsage(session, usage(100 * M))).inputTokens).toBe(
+        35 * M,
+      );
+      expect(sent.hook.mock.calls).toEqual([
+        ["m-run-0-hook", { grant: minted, kind: "usage-continued" }],
+        ["m-run-1-hook", { grant: minted, kind: "usage-continued" }],
+      ]);
     });
+
+    it("ignores a grant older than the one it applied", async () => {
+      const { minted, session } = await receive(["push"]);
+
+      const stale = continueSessionUsage(session, { ...minted, seq: minted.seq - 1 });
+
+      expect(stale).toBe(session);
+    });
+  });
+
+  it("forwards the grant an answer brings instead of minting one", async () => {
+    const root = await rootWithChildPrompt({ root: "a" });
+    const grant: SessionUsageGrant = {
+      askers: [{ requestId: root.request.requestId, total: usage(45 * M) }],
+      seq: 7,
+    };
+
+    const { session } = await answer(root, {
+      ...continueOn(root.request.requestId, alice),
+      usageGrant: grant,
+    });
+
+    expect(getSessionUsageGrant(session)).toEqual(grant);
+    expect(sent.hook.mock.calls).toEqual([["a-run-hook", { grant, kind: "usage-continued" }]]);
+    expect(
+      sent.session.mock.calls.map((call) => (call[1] as DeliverHookPayload).usageGrant),
+    ).toEqual([grant]);
+  });
+
+  it("mints one grant at the root and sends that grant down with the answer", async () => {
+    const root = await rootWithChildPrompt({ root: "a" });
+
+    const { session } = await answer(root, continueOn(root.request.requestId, alice));
+
+    const grant = {
+      askers: [{ requestId: root.request.requestId, total: usage(45 * M) }],
+      seq: 1,
+    };
+    expect(getSessionUsageGrant(session)).toEqual(grant);
+    expect(sent.hook.mock.calls).toEqual([["a-run-hook", { grant, kind: "usage-continued" }]]);
+    expect(
+      sent.session.mock.calls.map((call) => (call[1] as DeliverHookPayload).usageGrant),
+    ).toEqual([grant]);
   });
 
   it("pushes every prompt one payload approves, so each asker knows its copy", async () => {
@@ -933,7 +1025,13 @@ describe("a Continue on a relayed session-limit prompt", () => {
     });
 
     expect(sent.hook.mock.calls).toEqual([
-      ["a-run-hook", { kind: "usage-continued", requestIds: ids }],
+      [
+        "a-run-hook",
+        {
+          grant: { askers: ids.map((requestId) => ({ requestId, total: usage(45 * M) })), seq: 1 },
+          kind: "usage-continued",
+        },
+      ],
     ]);
     expect(getSessionUsageWindowIndex(session)).toBe(1);
   });
@@ -954,7 +1052,13 @@ describe("a Continue on a relayed session-limit prompt", () => {
 
     await answer(a, continueOn(a.request.requestId, alice));
     expect(sent.hook.mock.calls).toEqual([
-      ["a-run-hook", { kind: "usage-continued", requestIds: [a.request.requestId] }],
+      [
+        "a-run-hook",
+        {
+          grant: { askers: [{ requestId: a.request.requestId, total: usage(45 * M) }], seq: 1 },
+          kind: "usage-continued",
+        },
+      ],
     ]);
 
     sent.hook.mockClear();

@@ -507,7 +507,7 @@ it("passes a usage continuation to the body's agent sessions, and goes on when t
     commands: createChannelReader(
       "control",
       (async function* (): AsyncGenerator<WorkflowToolRunControlMessage> {
-        yield { kind: "usage-continued", requestIds: ["child:0"] };
+        yield { grant: { askers: [], seq: 1 }, kind: "usage-continued" };
         finish();
         await new Promise<void>(() => {});
       })(),
@@ -534,7 +534,7 @@ it("passes a usage continuation to the body's agent sessions, and goes on when t
 
   await workflowToolRunWorkflow(input);
 
-  expect(mocks.continueUsage).toHaveBeenCalledExactlyOnceWith(["child:0"]);
+  expect(mocks.continueUsage).toHaveBeenCalledExactlyOnceWith({ askers: [], seq: 1 });
   expect(mocks.applyCommand).not.toHaveBeenCalled();
   expect(mocks.deliver).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ kind: "outcome", result: { output: "done", status: "completed" } }),

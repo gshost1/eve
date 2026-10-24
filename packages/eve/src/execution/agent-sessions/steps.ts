@@ -3,6 +3,7 @@ import {
   getStepMetadata,
   getWorkflowMetadata,
 } from "#compiled/@workflow/core/index.js";
+import type { SessionUsageGrant } from "#harness/turn-tag-state.js";
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import type { SessionAuth } from "#context/session-context.js";
@@ -254,7 +255,7 @@ export async function cancelAgentSessionTurnStep(input: OpenedAgentSession): Pro
  * itself. Remote agents keep their own limits.
  */
 export async function continueAgentSessionsUsageStep(input: {
-  readonly requestIds: readonly string[];
+  readonly grant: SessionUsageGrant;
   readonly sessions: readonly OpenedAgentSession[];
 }): Promise<void> {
   "use step";
@@ -263,8 +264,8 @@ export async function continueAgentSessionsUsageStep(input: {
       if (address.kind === "remote") return;
       await ignoreGoneTarget(
         resumeSessionInbox(address.continuationToken, {
+          grant: input.grant,
           kind: "usage-continued",
-          requestIds: input.requestIds,
         }),
       ).catch((error: unknown) => {
         logError(log, "usage continuation not delivered", error, {

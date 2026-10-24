@@ -1,4 +1,5 @@
 import { findStubTarget, stubCallId } from "#tool-stubs/target.js";
+import type { SessionUsageGrant } from "#harness/turn-tag-state.js";
 import { toolStubOutput } from "#tool-stubs/output.js";
 import { getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 import { callToolStubStep } from "#execution/tool-stubs/steps.js";
@@ -70,7 +71,7 @@ export interface StartedWorkflowBody {
   close(): Promise<void>;
   readonly control: WorkflowBodyControl;
   /** Passes a session-limit Continue to the body's `ctx.agent` sessions. */
-  continueUsage(requestIds: readonly string[]): Promise<void>;
+  continueUsage(grant: SessionUsageGrant): Promise<void>;
   readonly outcome: Promise<WorkflowToolRunOutcome>;
   /** What the body's `ctx.agent` sessions spent, which the run's outcome carries. */
   readonly usage: RunUsageTally;

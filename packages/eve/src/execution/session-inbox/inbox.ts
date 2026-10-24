@@ -1,4 +1,5 @@
 import type { SessionPrewarmPayload } from "#execution/session-prewarm.js";
+import type { SessionUsageGrant } from "#harness/turn-tag-state.js";
 import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
 import { createHook, getWorkflowMetadata, type Hook } from "#compiled/@workflow/core/index.js";
 import { releaseSessionHooksStep } from "#execution/session-inbox/release-step.js";
@@ -57,7 +58,7 @@ export interface SessionHandoverObservation {
  */
 export interface SessionUsageContinuedPayload {
   readonly kind: "usage-continued";
-  readonly requestIds: readonly string[];
+  readonly grant: SessionUsageGrant;
 }
 
 export type SessionInboxPayload =

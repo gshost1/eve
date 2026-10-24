@@ -62,7 +62,7 @@ function sessionWithTask(input: { readonly name: string; readonly ownInputTokens
   const snapshot = writeTaskTable(
     resetSessionUsageWindow(
       setTurnUsageState(base.snapshot.session, { ...own, session: own, turnId: "turn_1" }),
-      ["root:0"],
+      { askers: [], seq: 1 },
     ),
     table,
   );

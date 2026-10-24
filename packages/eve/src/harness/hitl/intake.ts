@@ -15,7 +15,11 @@ import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
 import type { Step } from "#harness/step/context.js";
 import { SessionLimitDeclinedError, throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import type { SessionLimitAnswer } from "#harness/hitl/budget-request.js";
-import { getSessionUsageWindowIndex, resetSessionUsageWindow } from "#harness/turn-tag-state.js";
+import {
+  getSessionUsageWindowIndex,
+  mintSessionUsageGrant,
+  resetSessionUsageWindow,
+} from "#harness/turn-tag-state.js";
 import type { HarnessToolLookup, StepInput, StepResult } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import {
@@ -222,10 +226,11 @@ export async function acceptHumanInput(
 export async function admitApprovedWork(step: Step, work: ApprovedWork): Promise<void> {
   if (work.limit !== undefined) {
     if (!work.limit.granted) throw new SessionLimitDeclinedError();
-    // A Continue pushed from above may already have started the next window.
+    // A grant from above, or one this session minted routing the same payload, may already have
+    // started the next window.
     const current = getSessionUsageWindowIndex(step.session);
     if ((work.limit.windowIndex ?? current) === current) {
-      step.session = resetSessionUsageWindow(step.session, [work.limit.requestId]);
+      step.session = resetSessionUsageWindow(step.session, mintSessionUsageGrant(step.session, []));
     }
   }
   await step.apply(settle(step.view(), { results: [] }));

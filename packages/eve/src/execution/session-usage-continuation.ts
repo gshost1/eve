@@ -16,7 +16,9 @@ import { readHitlState } from "#harness/hitl/index.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import {
   getSessionUsageGrant,
+  mintSessionUsageGrant,
   resetSessionUsageWindow,
+  type SessionUsageGrant,
   type TokenUsageDelta,
 } from "#harness/turn-tag-state.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
@@ -25,11 +27,11 @@ import { resumeHook } from "#internal/workflow/runtime.js";
 import { openInputs } from "#protocol/session-projection.js";
 
 // A Continue on a session-limit prompt raises the allowance of every session
-// in the tree that asked. Each session the answer passes through starts a new
-// window and pushes `USAGE_CONTINUED` down to its runs, which pass it to the
-// sessions they opened. The push is best-effort: a session that misses it asks
-// once itself. It carries no principal, so it never starts a turn or changes
-// a turn's auth.
+// in the tree that asked. The root mints one grant per payload, and each
+// session applies the first copy that reaches it, as a forwarded answer or a
+// push, then pushes it to its runs, which pass it to the sessions they opened.
+// The push is best-effort: a session that misses it asks once itself. A grant
+// carries no principal, so it never starts a turn or changes a turn's auth.
 
 const log = createLogger("eve:session-usage");
 
@@ -50,34 +52,34 @@ const NO_USAGE: UsageCredit = {
 };
 
 /**
- * Starts a new usage window at the session's totals plus what its open relayed
- * session-limit prompts show was spent and not yet reported, so that spend
- * counts once, in the window being approved. A prompt's total less what this
- * session counted from the run that relayed it never exceeds that run's
- * unreported spend, so the credit can fall short, never overshoot. Only task
- * runs report usage up, so only their prompts earn credit.
+ * Applies `grant`: a new usage window starts at the session's totals plus what
+ * the grant's askers among its runs showed was spent and not yet reported, so
+ * that spend counts once, in the window being approved. An asker's total less
+ * what this session counted from the run that relayed it never exceeds that
+ * run's unreported spend, so the credit can fall short, never overshoot. Only
+ * task runs report usage up, so only their askers earn credit. Every copy of a
+ * grant carries every asker, so whichever copy arrives first starts the same
+ * window, and a later copy changes nothing.
  */
 export function continueSessionUsage(
   session: DurableSession,
-  grant: readonly string[],
+  grant: SessionUsageGrant,
 ): DurableSession {
   const relays = readHitlState(session.state).relays;
   const tasks = readTaskTable(session.state).tasks;
   const byRun = new Map<string, UsageCredit>();
-  for (const { request } of openInputs(storedProjection(session.state))) {
-    const relay = relays.get(request.requestId);
-    if (request.kind !== "session-limit" || relay?.runId === undefined) continue;
-    const run = tasks.find((task) => task.run?.runId === relay.runId)?.run;
+  for (const { requestId, total } of grant.askers) {
+    const runId = relays.get(requestId)?.runId;
+    const run = tasks.find((task) => runId !== undefined && task.run?.runId === runId)?.run;
     if (run === undefined) continue;
-    const total = request.action.input["total"] as TokenUsageDelta | undefined;
     // Prompts relayed through one run can share spend, so the run's credit is
     // its largest prompt, not their sum.
-    const credit = byRun.get(relay.runId) ?? { ...NO_USAGE };
+    const credit = byRun.get(run.runId) ?? { ...NO_USAGE };
     for (const field of USAGE_FIELDS) {
       const left = Math.max(0, (total?.[field] ?? 0) - (run.usage?.[field] ?? 0));
       credit[field] = Math.max(credit[field], left);
     }
-    byRun.set(relay.runId, credit);
+    byRun.set(run.runId, credit);
   }
   const unreported = { ...NO_USAGE };
   for (const credit of byRun.values()) {
@@ -87,15 +89,34 @@ export function continueSessionUsage(
   return resetSessionUsageWindow(session, grant, costUsd > 0 ? unreported : tokens);
 }
 
+/** Mints the grant for a payload that approves the relayed prompts `requestIds`. */
+export function mintRelayedUsageGrant(
+  session: DurableSession,
+  requestIds: readonly string[],
+): SessionUsageGrant {
+  return mintSessionUsageGrant(
+    session,
+    openInputs(storedProjection(session.state)).flatMap(({ request }) =>
+      request.kind === "session-limit" && requestIds.includes(request.requestId)
+        ? [
+            {
+              requestId: request.requestId,
+              total: request.action.input["total"] as TokenUsageDelta | undefined,
+            },
+          ]
+        : [],
+    ),
+  );
+}
+
 /**
  * Tells the session's started task runs and blocking workflow tool runs about
- * the Continue that started its current window.
+ * the grant that started its current window.
  */
 export async function pushSessionUsageContinuation(session: DurableSession): Promise<void> {
-  const message: WorkflowToolRunControlMessage = {
-    kind: "usage-continued",
-    requestIds: getSessionUsageGrant(session),
-  };
+  const grant = getSessionUsageGrant(session);
+  if (grant === undefined) return;
+  const message: WorkflowToolRunControlMessage = { grant, kind: "usage-continued" };
   const runs = [
     ...readTaskTable(session.state).tasks.flatMap((task) => (task.run?.started ? [task.run] : [])),
     ...getBlockingWorkflowToolRuns(session.state).map((run) => run.address),
@@ -110,30 +131,39 @@ export async function pushSessionUsageContinuation(session: DurableSession): Pro
 }
 
 /**
- * Applies a continuation pushed from above, passes it on, and answers the
- * session's own open session-limit prompts with Continue: the new window
- * starts at the session's totals, so they no longer hold.
+ * Applies a grant from above, pushed or carried by a forwarded answer, passes
+ * it on, and answers the session's own open session-limit prompts with
+ * Continue: the new window starts at the session's totals, so they no longer
+ * hold. Prompts in `answered` are left to the delivery that answers them.
  */
 export async function applySessionUsageContinuationStep(
-  input: SessionStepState & { readonly requestIds: readonly string[] },
+  input: SessionStepState & {
+    readonly answered: readonly string[];
+    readonly grant: SessionUsageGrant;
+  },
 ): Promise<SessionStateTransition & { readonly approved: readonly string[] }> {
   "use step";
   return await withSessionStateDelta(input, async (state) => {
     const current = readDurableSession(state.sessionState);
-    const session = continueSessionUsage(current, input.requestIds);
+    const session = continueSessionUsage(current, input.grant);
     if (session === current) return { approved: [], sessionState: state.sessionState };
     await pushSessionUsageContinuation(session);
     const relays = readHitlState(session.state).relays;
     return {
       approved: openInputs(storedProjection(session.state))
-        .filter(({ request }) => request.kind === "session-limit" && !relays.has(request.requestId))
+        .filter(
+          ({ request }) =>
+            request.kind === "session-limit" &&
+            !relays.has(request.requestId) &&
+            !input.answered.includes(request.requestId),
+        )
         .map(({ request }) => request.requestId),
       sessionState: replaceDurableSessionSnapshot({ session, state: state.sessionState }),
     };
   });
 }
 
-/** Tells the session's runs about a Continue it applied in a turn step. */
+/** Tells the session's runs about a grant it minted in a turn step. */
 export async function pushSessionUsageContinuationStep(input: {
   readonly sessionState: DurableSessionState;
 }): Promise<void> {
