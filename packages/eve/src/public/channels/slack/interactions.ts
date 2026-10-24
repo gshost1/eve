@@ -344,72 +344,93 @@ export async function handleInteractionPost(
   if (onInteraction) {
     const customActions = interaction.actions.filter((a) => !isHitlAction(a.actionId));
     if (customActions.length > 0) {
-      const actionUser = customActions[0]!.user;
-      const codeChannel =
-        deps.config.codeChannels === true &&
-        (await isSlackCodeChannel(
-          interaction.channelId,
-          buildSlackWorkspaceHandle({
-            api: deps.api,
-            botToken: deps.config.credentials?.botToken,
-            installationTeamId: interaction.installationTeamId,
-            teamId: interaction.teamId,
-          }).request,
-        ));
-      // A code channel is one session; a card in a thread there still replies in its thread.
-      const threadTs = codeChannel ? "" : interaction.threadTs;
-      const replyThreadTs =
-        codeChannel && interaction.threadTs !== customActions[0]!.messageTs
-          ? interaction.threadTs
-          : undefined;
-      const { thread, slack } = buildSlackBinding({
-        api: deps.api,
-        botToken: deps.config.credentials?.botToken,
-        channelId: interaction.channelId,
-        threadTs,
-        codeChannel,
-        replyThreadTs: () => replyThreadTs,
-        installationTeamId: interaction.installationTeamId,
-        teamId: interaction.teamId,
-      });
-      const slackCtx: SlackInteractionContext = {
-        ...bindSlackSessionOperations({
-          address: codeChannel
-            ? slackCodeChannelContinuationToken(interaction.channelId)
-            : slackContinuationToken(interaction.channelId, threadTs),
-          defaultAuth: buildSlackAuthContext({
-            channelId: interaction.channelId,
-            installationTeamId: interaction.installationTeamId,
-            teamId: interaction.teamId,
-            threadTs,
-            userId: actionUser.id,
-            userName: actionUser.username ?? actionUser.name,
-          }),
-          from: ctx.from,
-          resolveSession: ctx.resolveSession,
-          state: {
-            channelId: interaction.channelId,
-            installationTeamId: interaction.installationTeamId ?? null,
-            teamId: interaction.teamId ?? null,
-            threadTs: threadTs || null,
-            triggeringUserId: actionUser.id,
-            ...(codeChannel && { codeChannel: true, replyThreadTs: replyThreadTs ?? null }),
+      // The code channel lookup can call Slack, so it runs after the ack.
+      ctx.waitUntil(
+        dispatchCustomInteractions({ ctx, customActions, deps, interaction, onInteraction }).catch(
+          (error: unknown) => {
+            log.error("custom interaction dispatch failed", { error });
           },
-        }),
-        thread,
-        slack,
-      };
-      for (const action of customActions) {
-        ctx.waitUntil(
-          Promise.resolve(onInteraction(action, slackCtx)).catch((error: unknown) => {
-            log.error("custom interaction handler failed", { error });
-          }),
-        );
-      }
+        ),
+      );
     }
   }
 
   return ack;
+}
+
+/** Runs `onInteraction` for each custom action, in a code channel's session when it is one. */
+async function dispatchCustomInteractions(input: {
+  readonly ctx: Parameters<typeof handleInteractionPost>[1];
+  readonly customActions: readonly SlackInteractionAction[];
+  readonly deps: InteractionHandlerDeps;
+  readonly interaction: ParsedBlockActionsPayload;
+  readonly onInteraction: NonNullable<SlackChannelConfig["onInteraction"]>;
+}): Promise<void> {
+  const { ctx, customActions, deps, interaction, onInteraction } = input;
+  const actionUser = customActions[0]!.user;
+  const codeChannel =
+    deps.config.codeChannels === true &&
+    (await isSlackCodeChannel(
+      interaction.channelId,
+      buildSlackWorkspaceHandle({
+        api: deps.api,
+        botToken: deps.config.credentials?.botToken,
+        installationTeamId: interaction.installationTeamId,
+        teamId: interaction.teamId,
+      }).request,
+    ));
+  // A code channel is one session; a card in a thread there still replies in its thread.
+  const threadTs = codeChannel ? "" : interaction.threadTs;
+  const replyThreadTs =
+    codeChannel && interaction.threadTs !== customActions[0]!.messageTs
+      ? interaction.threadTs
+      : undefined;
+  const { thread, slack } = buildSlackBinding({
+    api: deps.api,
+    botToken: deps.config.credentials?.botToken,
+    channelId: interaction.channelId,
+    threadTs,
+    codeChannel,
+    replyThreadTs: () => replyThreadTs,
+    installationTeamId: interaction.installationTeamId,
+    teamId: interaction.teamId,
+  });
+  const slackCtx: SlackInteractionContext = {
+    ...bindSlackSessionOperations({
+      address: codeChannel
+        ? slackCodeChannelContinuationToken(interaction.channelId)
+        : slackContinuationToken(interaction.channelId, threadTs),
+      defaultAuth: buildSlackAuthContext({
+        channelId: interaction.channelId,
+        installationTeamId: interaction.installationTeamId,
+        teamId: interaction.teamId,
+        threadTs,
+        userId: actionUser.id,
+        userName: actionUser.username ?? actionUser.name,
+      }),
+      from: ctx.from,
+      resolveSession: ctx.resolveSession,
+      state: {
+        channelId: interaction.channelId,
+        installationTeamId: interaction.installationTeamId ?? null,
+        teamId: interaction.teamId ?? null,
+        threadTs: threadTs || null,
+        triggeringUserId: actionUser.id,
+        ...(codeChannel && { codeChannel: true, replyThreadTs: replyThreadTs ?? null }),
+      },
+    }),
+    thread,
+    slack,
+  };
+  await Promise.all(
+    customActions.map((action) =>
+      Promise.resolve()
+        .then(() => onInteraction(action, slackCtx))
+        .catch((error: unknown) => {
+          log.error("custom interaction handler failed", { error });
+        }),
+    ),
+  );
 }
 
 /** Normalizes Slack's two shortcut payload variants. */

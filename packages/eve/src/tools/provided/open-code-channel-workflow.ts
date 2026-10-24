@@ -50,9 +50,12 @@ function unavailable(reason: string): OpenCodeChannelOutput {
   return { reason, status: "unavailable" };
 }
 
+// Bounds what a long conversation copies into the step output and the new session.
+const MAX_HISTORY_MESSAGES = 50;
+
 async function readSessionTranscript(sessionId: string) {
   "use step";
-  const reducer = transcriptReducer();
+  const reducer = transcriptReducer({ maxMessages: MAX_HISTORY_MESSAGES });
   let transcript = reducer.initial();
   for await (const event of sessions.attach(sessionId).stream({ follow: false })) {
     transcript = reducer.reduce(transcript, event);

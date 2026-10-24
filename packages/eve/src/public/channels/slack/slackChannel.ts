@@ -324,6 +324,8 @@ export interface SlackInstrumentationMetadata extends Record<string, unknown> {
   readonly teamId: string | null;
   readonly threadTs: string | null;
   readonly triggeringUserId: string | null;
+  /** `true` in a code channel session; absent elsewhere. */
+  readonly codeChannel?: true;
 }
 
 /**
@@ -1212,11 +1214,21 @@ async function receiveInNewCodeChannel(
   // A workflow tool's session may only open a code channel from a message in its own
   // conversation, so it can't copy its transcript into someone else's thread. A route,
   // schedule, or event handler has no calling session and names the message itself.
+  const { request } = buildSlackWorkspaceHandle({
+    api: deps.api,
+    botToken: deps.credentials?.botToken,
+    installationTeamId,
+    teamId: deps.teamId,
+  });
   if (input.caller !== undefined) {
     const origin = await deps.resolveSession(
       slackContinuationToken(originChannelId, codeChannel.originThreadTs),
     );
-    if (origin?.id !== input.caller.sessionId) {
+    if (
+      origin?.id !== input.caller.sessionId ||
+      (codeChannel.originTs !== codeChannel.originThreadTs &&
+        !(await isSlackReplyInThread(request, originChannelId, codeChannel)))
+    ) {
       throw Object.assign(
         new Error(
           "This session isn't the conversation of the Slack message it names, so eve won't open a code channel from that message.",
@@ -1225,12 +1237,6 @@ async function receiveInNewCodeChannel(
       );
     }
   }
-  const { request } = buildSlackWorkspaceHandle({
-    api: deps.api,
-    botToken: deps.credentials?.botToken,
-    installationTeamId,
-    teamId: deps.teamId,
-  });
   const opened = await openSlackCodeChannel({
     auth: input.auth,
     installationTeamId,
@@ -1249,6 +1255,28 @@ async function receiveInNewCodeChannel(
     state: opened.state,
     title: input.title,
   });
+}
+
+/**
+ * Whether `originTs` is a reply in `originThreadTs`. A reply's permalink names
+ * its thread, and `chat.getPermalink` needs no scopes, unlike
+ * `conversations.replies`.
+ */
+async function isSlackReplyInThread(
+  request: SlackRequest,
+  channelId: string,
+  target: Pick<SlackCodeChannelTarget, "originThreadTs" | "originTs">,
+): Promise<boolean> {
+  const response = await request("chat.getPermalink", {
+    channel: channelId,
+    message_ts: target.originTs,
+  });
+  if (response.ok !== true || typeof response.permalink !== "string") return false;
+  try {
+    return new URL(response.permalink).searchParams.get("thread_ts") === target.originThreadTs;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1360,40 +1388,58 @@ async function handleEventPost(input: {
   // Slack requires an agent to stop when a person stops a code channel session.
   // The stop names the channel, or a thread in it; both are the channel's one session.
   const stopped = envelope.event;
-  if (config.codeChannels === true && stopped.type === "agent_session_stopped") {
-    const stoppedChannelId = stopped.channel;
+  const stoppedChannelId = stopped.channel;
+  if (
+    config.codeChannels === true &&
+    stopped.type === "agent_session_stopped" &&
+    typeof stoppedChannelId === "string"
+  ) {
+    // A redelivered stop must not cancel a turn that started after the first one.
+    if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
+      return new Response("ok");
+    }
     const workspaceRequest = buildSlackWorkspaceHandle({
       api: input.api,
       botToken: config.credentials?.botToken,
       installationTeamId,
       teamId: typeof envelope.team_id === "string" ? envelope.team_id : undefined,
     }).request;
-    if (
-      typeof stoppedChannelId === "string" &&
-      (stopped.thread_ts === undefined ||
-        (await isSlackCodeChannel(stoppedChannelId, workspaceRequest)))
-    ) {
-      // A redelivered stop must not cancel a turn that started after the first one.
-      if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
-        return new Response("ok");
-      }
-      const source = input.from(slackCodeChannelContinuationToken(stoppedChannelId));
-      input.waitUntil(
-        (async () => {
-          const result = await source.cancel();
-          // A turn that died without ending leaves the status at `processing`, which
-          // never times out, so stop must still reset it.
-          if (result.status === "no_active_turn") {
-            await setSlackCodeChannelStatus(workspaceRequest, stoppedChannelId, "active");
-          }
-        })().catch((error: unknown) => {
-          logError(log, "agent_session_stopped cancel failed", error, {
-            channelId: stoppedChannelId,
+    const onEvent = config.onEvent;
+    input.waitUntil(
+      (async () => {
+        // A threaded stop needs the code channel lookup, which must not hold Slack's ack.
+        if (
+          stopped.thread_ts !== undefined &&
+          !(await isSlackCodeChannel(stoppedChannelId, workspaceRequest))
+        ) {
+          if (onEvent === undefined) return;
+          await dispatchSlackEvent({
+            api: input.api,
+            from: input.from,
+            resolveSession: input.resolveSession,
+            codeChannels: true,
+            credentials: config.credentials,
+            envelope,
+            handler: onEvent,
+            installationTeamId,
           });
-        }),
-      );
-      return new Response("ok");
-    }
+          return;
+        }
+        const result = await input
+          .from(slackCodeChannelContinuationToken(stoppedChannelId))
+          .cancel();
+        // A turn that died without ending leaves the status at `processing`, which
+        // never times out, so stop must still reset it.
+        if (result.status === "no_active_turn") {
+          await setSlackCodeChannelStatus(workspaceRequest, stoppedChannelId, "active");
+        }
+      })().catch((error: unknown) => {
+        logError(log, "agent_session_stopped handling failed", error, {
+          channelId: stoppedChannelId,
+        });
+      }),
+    );
+    return new Response("ok");
   }
 
   // Handler precedence, in fall-through order:

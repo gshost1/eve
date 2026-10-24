@@ -218,6 +218,13 @@ describe("workflow tool channel handoffs", () => {
               : { id: body.channel, is_private: false },
         });
       }
+      // Alice's message is a reply in the origin thread, which its permalink names.
+      if (method === "chat.getPermalink") {
+        return Response.json({
+          ok: true,
+          permalink: `https://acme.slack.com/archives/${body.channel}/p${body.message_ts!.replace(".", "")}?thread_ts=1700000000.000001&cid=${body.channel}`,
+        });
+      }
       // Slack returns the same channel for a repeated session_id.
       if (method === "agents.conversations.create") {
         return Response.json(

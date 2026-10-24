@@ -5944,12 +5944,21 @@ describe("slackChannel().receive", () => {
     expect(input.auth.principalId).toBe("p");
   });
 
+  // A reply's permalink names its thread.
+  function permalinkInThread(threadTs: string) {
+    return Response.json({
+      ok: true,
+      permalink: `https://acme.slack.com/archives/C_ORIGIN/p1700000000000002?thread_ts=${threadTs}&cid=C_ORIGIN`,
+    });
+  }
+
   it("opens a code channel and starts its session there with auth moved to the channel", async () => {
-    fetchMock.mockImplementation(async (url: string | URL) =>
-      String(url).endsWith("/agents.conversations.create")
+    fetchMock.mockImplementation(async (url: string | URL) => {
+      if (String(url).endsWith("/chat.getPermalink")) return permalinkInThread("1700000000.000001");
+      return String(url).endsWith("/agents.conversations.create")
         ? Response.json({ ok: true, channel_id: "C_CODE_RECEIVE" })
-        : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" }),
-    );
+        : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" });
+    });
     const send = vi.fn().mockResolvedValue({ id: "s" });
     const originAuth = buildSlackAuthContext({
       channelId: "C_ORIGIN",
@@ -6039,6 +6048,28 @@ describe("slackChannel().receive", () => {
           target: { channelId: "C_ORIGIN", codeChannel: CODE_CHANNEL_TARGET },
           auth: null,
           caller: { sessionId: "session_dm" },
+        },
+        withSourceSession(mockChannelContext(send)),
+      ),
+    ).rejects.toMatchObject({ fatal: true });
+    expect(slackCalls(fetchMock, "agents.conversations.create")).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("refuses a code channel from a reply in another thread of the origin channel", async () => {
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith("/chat.getPermalink")
+        ? permalinkInThread("1700000000.000900")
+        : Response.json({ ok: true, channel: { is_private: false } }),
+    );
+    const send = vi.fn();
+    await expect(
+      buildReceive("xoxb-test", { codeChannels: true })(
+        {
+          message: "hi",
+          target: { channelId: "C_ORIGIN", codeChannel: CODE_CHANNEL_TARGET },
+          auth: null,
+          caller: { sessionId: "session_source" },
         },
         withSourceSession(mockChannelContext(send)),
       ),
@@ -6953,8 +6984,31 @@ describe("slackChannel() code channels", () => {
     const first = await firePost(channel, buildSignedRequest({ body }));
     const redelivered = await firePost(channel, buildSignedRequest({ body }));
 
-    expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "code:C_CODE_THREAD_STOP" });
+    await vi.waitFor(() =>
+      expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "code:C_CODE_THREAD_STOP" }),
+    );
     expect(redelivered.cancel).not.toHaveBeenCalled();
+  });
+
+  it("leaves a stop in an ordinary thread to onEvent with codeChannels", async () => {
+    useCodeChannels([]);
+    const onEvent = vi.fn();
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onEvent,
+    });
+    const body = buildEventBody({
+      channel: "C_THREAD_STOP",
+      thread_ts: "1700000000.000100",
+      type: "agent_session_stopped",
+      user: "U1",
+    });
+
+    const { cancel } = await firePost(channel, buildSignedRequest({ body }));
+
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalled());
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("suspends the session status while a turn waits on input", async () => {
