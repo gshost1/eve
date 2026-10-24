@@ -37,42 +37,72 @@ interface Repository {
 
 // Slack keeps at most one diff view per channel, up to 1,000,000 bytes.
 const MAX_DIFF_BYTES = 1_000_000;
+// Untracked files over this size are left out of the diff view.
+const MAX_UNTRACKED_FILE_BYTES = 100_000;
 const RECORD = "\x1e";
+const SECTION = "\x1d";
 
-// One sandbox round trip: each repository's metadata line, then its diff against
-// the merge base with the remote's default branch, untracked files included.
+// One sandbox round trip. First each repository's metadata line, then, under
+// one byte cap for all of them, each diff against the merge base with the
+// remote's default branch. Untracked files are included, except ones that
+// look like secrets or are too large to review, since the diff view is posted
+// to Slack.
 const READ_WORKSPACE = `
-for git in $(find /workspace/repos -mindepth 2 -maxdepth 3 -name .git -type d 2>/dev/null); do
+repos=$(find /workspace/repos -mindepth 2 -maxdepth 3 -name .git -type d 2>/dev/null)
+for git in $repos; do
+  repo=\${git%/.git}
+  cd "$repo" || continue
+  base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+  printf '${RECORD}%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$repo" "$(basename "$repo")" \\
+    "$(git remote get-url origin 2>/dev/null | sed -E 's#//[^/@]*@#//#')" \\
+    "$(git branch --show-current)" "\${base#origin/}" "$(git rev-parse --abbrev-ref @{u} 2>/dev/null)"
+done
+printf '${SECTION}'
+for git in $repos; do
   repo=\${git%/.git}
   cd "$repo" || continue
   name=$(basename "$repo")
   base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
   since=$(git merge-base HEAD "$base" 2>/dev/null || git rev-parse HEAD 2>/dev/null)
-  printf '${RECORD}%s\\t%s\\t%s\\t%s\\t%s\\n' "$name" "$(git remote get-url origin 2>/dev/null | sed -E 's#//[^/@]*@#//#')" \\
-    "$(git branch --show-current)" "\${base#origin/}" "$(git rev-parse --abbrev-ref @{u} 2>/dev/null)"
+  printf '${RECORD}%s\\n' "$repo"
   {
     git diff --src-prefix="a/$name/" --dst-prefix="b/$name/" "$since"
-    git ls-files --others --exclude-standard -z |
-      xargs -0 -r -n1 git diff --no-index --src-prefix="a/$name/" --dst-prefix="b/$name/" /dev/null
-  } 2>/dev/null | head -c $((${MAX_DIFF_BYTES} + 1))
-done
+    git ls-files --others --exclude-standard -z | xargs -0 -r sh -c '
+      for file; do
+        case "/$file" in
+          */.env | */.env.* | */.npmrc | */.netrc | */id_rsa* | */id_ed25519* | *.pem | *.key | *.p12 | *.pfx) continue ;;
+        esac
+        [ "$(wc -c < "$file")" -le ${MAX_UNTRACKED_FILE_BYTES} ] || continue
+        git diff --no-index --src-prefix="a/$0/" --dst-prefix="b/$0/" /dev/null "$file"
+      done' "$name"
+  } 2>/dev/null
+done | head -c $((${MAX_DIFF_BYTES} + 1))
 true
 `;
 
 async function readWorkspace(sandbox: SandboxSession): Promise<Repository[]> {
   const { stdout } = await sandbox.run({ command: READ_WORKSPACE });
+  const section = stdout.indexOf(SECTION);
+  const diffs = new Map<string, string>();
+  for (const record of stdout
+    .slice(section + 1)
+    .split(RECORD)
+    .slice(1)) {
+    const newline = record.indexOf("\n");
+    diffs.set(record.slice(0, newline), record.slice(newline + 1));
+  }
   return stdout
+    .slice(0, section)
     .split(RECORD)
     .slice(1)
     .map((record) => {
-      const newline = record.indexOf("\n");
-      const [name = "", remote = "", branch = "", base = "", upstream = ""] = record
-        .slice(0, newline)
+      const [path = "", name = "", remote = "", branch = "", base = "", upstream = ""] = record
+        .replace(/\n$/, "")
         .split("\t");
       return {
         base,
         branch,
-        diff: record.slice(newline + 1),
+        diff: diffs.get(path) ?? "",
         name,
         pushed: upstream.length > 0,
         // The script strips credentials from the remote; only the owner/name slug is kept.
@@ -96,7 +126,10 @@ function contextBarItems(repository: Repository | undefined, status: CodeChannel
         icon: "branch",
         key: "branch",
         label: repository.branch,
-        ...(repoUrl && repository.pushed && { url: `${repoUrl}/tree/${repository.branch}` }),
+        ...(repoUrl &&
+          repository.pushed && {
+            url: `${repoUrl}/tree/${repository.branch.split("/").map(encodeURIComponent).join("/")}`,
+          }),
       });
     }
     const files = repository.diff.match(/^diff --git /gm)?.length ?? 0;
@@ -120,13 +153,11 @@ function contextBarItems(repository: Repository | undefined, status: CodeChannel
 
 // Cuts at a file boundary, so the view never shows half a hunk.
 function truncateDiff(diff: string): string {
-  let end = diff.length;
-  while (Buffer.byteLength(diff.slice(0, end), "utf8") > MAX_DIFF_BYTES) {
-    const cut = diff.lastIndexOf("\ndiff --git ", end - 2);
-    if (cut < 0) return "";
-    end = cut + 1;
-  }
-  return diff.slice(0, end);
+  const bytes = Buffer.from(diff, "utf8");
+  if (bytes.length <= MAX_DIFF_BYTES) return diff;
+  const head = bytes.subarray(0, MAX_DIFF_BYTES).toString("utf8");
+  const cut = head.lastIndexOf("\ndiff --git ");
+  return cut < 0 ? "" : head.slice(0, cut + 1);
 }
 
 /**

@@ -26,7 +26,11 @@ const codeChannelSurfaces = defineSlackRenderer({
         event.finishReason === "tool-calls" &&
         event.message.trim() !== ""
       ) {
-        await channel.thread.post(event.message);
+        try {
+          await channel.thread.post(event.message);
+        } catch (error) {
+          console.warn("Could not post the progress note", error);
+        }
       }
       await next();
     },

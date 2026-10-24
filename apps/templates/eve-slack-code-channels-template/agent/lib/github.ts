@@ -2,7 +2,7 @@ import type { GitHubLeaseBroker } from "eve/extensions/git";
 import type { SandboxNetworkPolicy } from "eve/sandbox";
 import type { VercelSandboxSession } from "eve/sandbox/vercel";
 
-/** Vercel Connect GitHub connector shared by the channel and the `git__gh` tool. */
+/** Vercel Connect GitHub connector that brokers credentials for the `git__gh` tool. */
 export const GITHUB_CONNECTOR = process.env.GITHUB_CONNECTOR || "github/code-channels";
 
 /**
