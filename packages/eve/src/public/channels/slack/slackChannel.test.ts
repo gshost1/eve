@@ -6733,8 +6733,31 @@ describe("slackChannel() code channels", () => {
     const first = await firePost(channel, buildSignedRequest({ body }));
     const redelivered = await firePost(channel, buildSignedRequest({ body }));
 
-    expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "code:C_CODE_THREAD_STOP" });
+    await vi.waitFor(() =>
+      expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "code:C_CODE_THREAD_STOP" }),
+    );
     expect(redelivered.cancel).not.toHaveBeenCalled();
+  });
+
+  it("leaves a stop in an ordinary thread to onEvent with codeChannels", async () => {
+    useCodeChannels([]);
+    const onEvent = vi.fn();
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onEvent,
+    });
+    const body = buildEventBody({
+      channel: "C_THREAD_STOP",
+      thread_ts: "1700000000.000100",
+      type: "agent_session_stopped",
+      user: "U1",
+    });
+
+    const { cancel } = await firePost(channel, buildSignedRequest({ body }));
+
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalled());
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("suspends the session status while a turn waits on input", async () => {
