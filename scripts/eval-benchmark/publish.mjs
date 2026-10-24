@@ -82,7 +82,7 @@ export async function publishRun({
   return { prefix, objects: uploads.length + 2, records: records.length };
 }
 
-async function putImmutable(store, pathname, body, contentType) {
+export async function putImmutable(store, pathname, body, contentType) {
   try {
     await store.put(pathname, body, contentType);
   } catch (error) {
