@@ -54,7 +54,6 @@ interface ChildBucket {
   readonly childSessionInbox?: SessionInboxAddress;
   readonly metadata: NonNullable<DeliverHookPayload["deliveryMetadata"]>[number][];
   readonly payloads: DeliverPayload[];
-  readonly payloadCallers: (string | null)[];
 }
 
 /**
@@ -186,11 +185,9 @@ async function routeProxiedDeliver(
         childSessionInbox: forChild.childSessionInbox,
         metadata: [],
         payloads: [],
-        payloadCallers: [],
       };
       const childPayloadIndex = child.payloads.length;
       child.payloads.push(forChild.payload);
-      child.payloadCallers.push(sourceDelivery.payloadCallers?.[sourcePayloadIndex] ?? null);
       if (routed.forSelf === undefined && childIndex === 0) {
         for (const metadata of sourceDelivery.deliveryMetadata ?? []) {
           if (metadata.payloadIndex === sourcePayloadIndex) {
@@ -267,8 +264,6 @@ async function routeProxiedDeliver(
         ...sourceDelivery,
         deliveryMetadata: child.metadata.length === 0 ? undefined : child.metadata,
         payloads: child.payloads,
-        payloadCallers:
-          sourceDelivery.payloadCallers === undefined ? undefined : child.payloadCallers,
       };
       const remote = child.remote;
       if (remote !== undefined) {

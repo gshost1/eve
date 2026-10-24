@@ -1,7 +1,7 @@
 import type { EveMessage } from "#client/message-types.js";
+import type { DeliveryOutcome } from "#protocol/session-events/families/delivery.js";
 import type { CallRow, DeliveryRow, TaskRow } from "#protocol/session-projection/tables.js";
 import { sessionTables, type SessionView } from "#protocol/session-projection/session-view.js";
-import { activeTurn } from "#protocol/session-projection/selectors.js";
 
 export interface FollowedChild {
   /** Root depth is zero; its immediate children have depth one. */
@@ -28,7 +28,7 @@ export type AgentObservationReason =
 export type AgentObservation =
   | { readonly status: "not-followed"; readonly reason?: AgentObservationReason }
   | {
-      readonly status: "queued" | "following" | "idle" | "interrupted" | "unavailable";
+      readonly status: "queued" | "following" | "caught-up" | "interrupted" | "unavailable";
       /** Identity in this store's authorized reader scope, established by the server. */
       readonly key?: string;
       readonly conversation: ConversationState;
@@ -80,79 +80,79 @@ export function taskCalls(view: SessionView, taskId: string): readonly CallRow[]
   return Object.values(sessionTables(view).calls).filter((call) => call.taskId === taskId);
 }
 
-/** Named deliveries are authoritative; unnamed remote sessions retain their in-order mapping. */
-function callDeliveries(
-  calls: readonly CallRow[],
-  conversation: ConversationState,
-): ReadonlyMap<string, readonly DeliveryRow[]> | undefined {
-  const rows = Object.values(sessionTables(conversation.view).deliveries)
-    .filter((row) => row.source !== undefined && "channel" in row.source)
-    .sort((a, b) => a.introducedAt - b.introducedAt);
-  const named = rows.flatMap((row) => {
-    const callId =
-      row.source !== undefined && "caller" in row.source ? row.source.caller?.callId : undefined;
-    return callId === undefined ? [] : [{ callId, row }];
-  });
-  if (named.length === 0) return undefined;
-  const byCall = new Map<string, DeliveryRow[]>(calls.map(({ callId }) => [callId, []]));
-  for (const { callId, row } of named) byCall.get(callId)?.push(row);
-  return byCall;
+/** A delivery a call sent, as this reader has seen it on the child's stream. */
+export interface AgentCallDelivery {
+  readonly deliveryId: string;
+  /** `unseen` until this reader reads the child's admission, including when it follows none. */
+  readonly status: "unseen" | DeliveryRow["status"];
+  /** The child turn that consumed it. */
+  readonly turnId?: string;
+  readonly outcome?: DeliveryOutcome;
 }
 
-/** Each child turn belongs to the call whose delivery it consumed first; resumed turns retain that owner. */
-export function agentCallTurns(
-  calls: readonly CallRow[],
-  conversation: ConversationState,
-): ReadonlyMap<string, readonly string[]> {
-  const callIds = calls.map((call) => call.callId);
-  const owners = new Map<string, string>();
-  const byCall = callDeliveries(calls, conversation);
-  if (byCall === undefined) {
-    let index = 0;
-    for (const message of conversation.messages) {
-      if (message.role !== "user") continue;
-      const callId = callIds[index++];
-      const turnId = message.metadata?.turnId;
-      if (callId !== undefined && turnId !== undefined && !owners.has(turnId))
-        owners.set(turnId, callId);
-    }
-  } else {
-    const consumed = [...byCall].flatMap(([callId, rows]) =>
-      rows.flatMap((row) =>
-        row.turnId === undefined || row.consumedAt === undefined
-          ? []
-          : [{ at: row.consumedAt, callId, turnId: row.turnId }],
-      ),
-    );
-    for (const { callId, turnId } of consumed.sort((a, b) => a.at - b.at)) {
-      if (!owners.has(turnId)) owners.set(turnId, callId);
-    }
-  }
-  const turns = new Map<string, string[]>(callIds.map((callId) => [callId, []]));
-  let owner: string | undefined;
-  for (const turnId of Object.keys(sessionTables(conversation.view).turns)) {
-    owner = owners.get(turnId) ?? owner;
-    if (owner !== undefined) turns.get(owner)?.push(turnId);
-  }
-  return turns;
+/** One child session's part in a call: what the call sent it, and the turns that read it. */
+export interface AgentCallSession {
+  readonly sessionId: string;
+  readonly deliveries: readonly AgentCallDelivery[];
+  /**
+   * Child turns that consumed the call's deliveries, oldest first. `sharedWith` names the other
+   * calls whose deliveries the same turn consumed, so its content answers them together.
+   */
+  readonly turns: readonly { readonly turnId: string; readonly sharedWith: readonly string[] }[];
 }
 
-/** A settled root call still waits for its exact child delivery's content and settlement. */
-export function isAgentCallContentPending(
-  calls: readonly CallRow[],
-  call: CallRow,
-  conversation: ConversationState,
-): boolean {
-  const turnIds = agentCallTurns(calls, conversation).get(call.callId) ?? [];
-  const turnId = activeTurn(sessionTables(conversation.view))?.turnId;
-  if (turnId !== undefined && turnIds.includes(turnId)) return true;
-  const byCall = callDeliveries(calls, conversation);
-  if (byCall !== undefined) {
-    const rows = byCall.get(call.callId) ?? [];
-    if (rows.some((row) => row.status !== "settled")) return true;
-    return call.outcome === "completed" && rows.length === 0;
-  }
-  if (call.outcome !== "completed") return false;
-  const received = conversation.messages.filter((message) => message.role === "user").length;
-  return received <= calls.findIndex((candidate) => candidate.callId === call.callId);
+/**
+ * The child activity a call caused, from the `child.sent` links its session recorded: `unlinked`
+ * when it recorded none, as for a call that sent nothing or reached an earlier-protocol remote
+ * agent.
+ */
+export type AgentCallActivity =
+  | { readonly status: "unlinked" }
+  | { readonly status: "linked"; readonly sessions: readonly AgentCallSession[] };
+
+export function agentCallActivity(state: ConversationState, callId: string): AgentCallActivity {
+  const sessions = Object.values(sessionTables(state.view).children).flatMap(
+    (child): AgentCallSession[] => {
+      const sent = child.deliveries ?? [];
+      if (!sent.some((entry) => entry.callId === callId)) return [];
+      const callOf = new Map(sent.map((entry) => [entry.deliveryId, entry.callId]));
+      const observation = state.agents[child.sessionId]?.observation;
+      const tables =
+        observation === undefined || observation.status === "not-followed"
+          ? undefined
+          : sessionTables(observation.conversation.view);
+      const deliveries = sent.flatMap((entry): AgentCallDelivery[] => {
+        if (entry.callId !== callId) return [];
+        const row = tables?.deliveries[entry.deliveryId];
+        if (row === undefined) return [{ deliveryId: entry.deliveryId, status: "unseen" }];
+        return [
+          {
+            deliveryId: entry.deliveryId,
+            status: row.status,
+            ...(row.turnId !== undefined && { turnId: row.turnId }),
+            ...(row.outcome !== undefined && { outcome: row.outcome }),
+          },
+        ];
+      });
+      const read = new Set(
+        deliveries.flatMap(({ turnId }) => (turnId === undefined ? [] : [turnId])),
+      );
+      const turns = Object.values(tables?.turns ?? {})
+        .filter((turn) => read.has(turn.turnId))
+        .sort((a, b) => a.introducedAt - b.introducedAt)
+        .map((turn) => ({
+          turnId: turn.turnId,
+          sharedWith: [
+            ...new Set(
+              Object.values(tables!.deliveries).flatMap((row) => {
+                const other = row.turnId === turn.turnId ? callOf.get(row.deliveryId) : undefined;
+                return other === undefined || other === callId ? [] : [other];
+              }),
+            ),
+          ],
+        }));
+      return [{ sessionId: child.sessionId, deliveries, turns }];
+    },
+  );
+  return sessions.length === 0 ? { status: "unlinked" } : { status: "linked", sessions };
 }

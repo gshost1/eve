@@ -272,6 +272,17 @@ function foldFact(
       };
       return;
     }
+    case "child.sent": {
+      const { callId, childDeliveryId: deliveryId, sessionId } = fact.data;
+      const child = view.children[sessionId];
+      if (child === undefined || child.deliveries?.some((sent) => sent.deliveryId === deliveryId))
+        return;
+      view.children[sessionId] = {
+        ...child,
+        deliveries: [...(child.deliveries ?? []), { callId, deliveryId }],
+      };
+      return;
+    }
     case "usage.recorded": {
       const { kind, owner, usage } = fact.data;
       if (usage === null || typeof usage !== "object") return;
@@ -589,6 +600,8 @@ function prune(view: MutableView, keep: FoldOptions["keep"]): void {
     const owner =
       "callId" in row.owner ? view.calls[row.owner.callId] : view.tasks[row.owner.taskId];
     if (owner === undefined) delete view.children[id];
+    // Delivery links serve readers, not execution; keep them out of operational checkpoints.
+    else if (row.deliveries !== undefined) view.children[id] = { ...row, deliveries: undefined };
   }
   for (const row of Object.values(view.calls)) {
     if (row.status === "settled" && !pinned.has(`calls:${row.callId}`)) withholdLarge(view, row);

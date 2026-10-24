@@ -1,5 +1,5 @@
 import { defineEval } from "eve/evals";
-import { SessionStore } from "eve/client";
+import { agentCallActivity, SessionStore } from "eve/client";
 import { waitForStore, interceptFetchOrigin } from "@eve-e2e/config/frontend";
 
 import { readHookAudit, recordsEveryAgentStart } from "./subagent-hook-audit.shared";
@@ -15,6 +15,7 @@ export default defineEval({
     turn.expectOk();
     turn.calledTool("fanout_agents", { count: 1, status: "completed" });
     turn.event("child.opened", { data: { name: "workflow-marker" }, count: 2 });
+    turn.event("child.sent", { count: 2 });
     turn.eventsSatisfy("parallel sessions are distinct children of one tool call", (events) => {
       const started = events.flatMap((event) =>
         event.type === "child.opened" && event.data.name === "workflow-marker" ? [event.data] : [],
@@ -85,7 +86,7 @@ export default defineEval({
             children.length === 2 &&
             children.every(
               ({ observation }) =>
-                observation.status === "idle" &&
+                observation.status === "caught-up" &&
                 observation.caughtUp &&
                 observation.position > 0 &&
                 observation.conversation?.messages.some(
@@ -100,6 +101,22 @@ export default defineEval({
         },
         t.abortSignal,
       );
+      turn.eventsSatisfy("one call's accepted deliveries link to both observed child turns", () => {
+        const callId = turn.toolCalls.find((call) => call.name === "fanout_agents")?.callId;
+        if (callId === undefined) return false;
+        const activity = agentCallActivity(store.snapshot, callId);
+        return (
+          activity.status === "linked" &&
+          activity.sessions.length === 2 &&
+          activity.sessions.every(
+            (session) =>
+              session.deliveries.length === 1 &&
+              session.deliveries[0]?.status === "settled" &&
+              session.turns.length === 1 &&
+              session.turns[0]?.turnId === session.deliveries[0]?.turnId,
+          )
+        );
+      });
       turn.eventsSatisfy(
         "the headless store observes workflow children without replaying the root",
         () => store.snapshot.events.length === turn.events.length,

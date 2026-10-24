@@ -1,6 +1,7 @@
 import { deliverWorkflowRelay } from "#execution/tools/workflow/owner.js";
 import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import {
+  isAgentSessionMessage,
   runMessageBatchBudget,
   type WorkflowToolAskRequest,
   type WorkflowToolRunMessage,
@@ -35,7 +36,7 @@ interface HandlerInput<T> {
 }
 
 export function isAppliedRunMessage(message: WorkflowToolRunMessage): message is AppliedRunMessage {
-  return message.kind === "agent-started" || message.kind === "report" || isTaskRunMessage(message);
+  return isAgentSessionMessage(message) || message.kind === "report" || isTaskRunMessage(message);
 }
 
 /**

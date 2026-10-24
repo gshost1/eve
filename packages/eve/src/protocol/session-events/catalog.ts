@@ -120,6 +120,7 @@ export const FACT_CATALOG: { readonly [TType in Fact["type"]]: FactDescriptor } 
   "call.settled": { family: "call", idField: "callId", role: "terminal" },
   "call.started": { family: "call", idField: "callId", role: "updates" },
   "child.opened": { family: "child", idField: "sessionId", role: "introduces" },
+  "child.sent": { family: "child", idField: "sessionId", role: "record" },
   "content.completed": { family: "content", idField: "partId", role: "complete" },
   "context.settled": { family: "context", idField: "changeId", role: "terminal" },
   "context.started": { family: "context", idField: "changeId", role: "introduces" },

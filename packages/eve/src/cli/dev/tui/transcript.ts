@@ -1,8 +1,7 @@
 import { sessionTables, snapshotState } from "#protocol/session-projection/session-view.js";
 import {
-  agentCallTurns,
+  agentCallActivity,
   agentToolSession,
-  isAgentCallContentPending,
   type ConversationState,
   taskCalls,
 } from "#client/conversation-state.js";
@@ -393,18 +392,25 @@ export class ConversationTranscript {
         ? undefined
         : agent.observation.conversation;
     if (agent === undefined || child === undefined) return { tools: [], rows: [], pending: false };
+    // A settled call still waits for its deliveries' content while the child works on them.
+    const sent = calls.flatMap((call) => {
+      const activity = agentCallActivity(conversation, call.callId);
+      return activity.status === "unlinked"
+        ? []
+        : activity.sessions.filter((session) => session.sessionId === agent.sessionId);
+    });
     const pending =
       agent.observation.status === "following" &&
-      calls.some((call) =>
-        isAgentCallContentPending(taskCalls(conversation.view, task.taskId), call, child),
-      );
-    const callTurns = agentCallTurns(taskCalls(conversation.view, task.taskId), child);
-    const turnIds = new Set(calls.flatMap((call) => callTurns.get(call.callId) ?? []));
+      sent.some((session) => session.deliveries.some(({ status }) => status !== "settled"));
+    const turnIds = new Set(sent.flatMap((session) => session.turns.map(({ turnId }) => turnId)));
+    // Without delivery links, show generic child activity rather than guessing which call caused it.
+    const unlinked = !sessionTables(conversation.view).children[agent.sessionId]?.deliveries
+      ?.length;
     const messages = child.messages.filter(
       (message) =>
         message.role === "assistant" &&
         message.metadata?.turnId !== undefined &&
-        turnIds.has(message.metadata.turnId),
+        (unlinked || turnIds.has(message.metadata.turnId)),
     );
     const childTasks = taskCallsById(child);
     const ordered: Array<{ order: number; block: Block; settled: boolean }> = [];

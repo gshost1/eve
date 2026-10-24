@@ -36,6 +36,72 @@ function project(events: readonly SessionEvent[]) {
 }
 
 describe("ConversationTranscript", () => {
+  it.each([true, false])(
+    "shows linked activity, or generic child activity without links (linked: %s)",
+    (linked) => {
+      const parent = new Conversation();
+      const child = new Conversation();
+      const events: SessionEvent[] = [
+        ...testTurnFacts(0, "Review the plan.", ["parent_delivery"]).slice(0, 4),
+        {
+          type: "call.requested",
+          scope: { turnId: "turn_0", runId: "run_0" },
+          data: {
+            callId: "review",
+            capability: { kind: "agent", name: "reviewer" },
+            input: {},
+            owner: { runId: "run_0" },
+          },
+        },
+        {
+          type: "task.started",
+          data: {
+            taskId: "task",
+            startedBy: { callId: "review" },
+            kind: "agent",
+            name: "reviewer",
+          },
+        },
+        { type: "call.started", data: { callId: "review", taskId: "task" } },
+        {
+          type: "child.opened",
+          scope: { turnId: "turn_0", taskId: "task" },
+          data: { name: "reviewer", owner: { callId: "review" }, sessionId: "child", stream: "" },
+        },
+        ...(linked
+          ? [
+              {
+                type: "child.sent",
+                data: { callId: "review", childDeliveryId: "d_0", sessionId: "child" },
+              } satisfies SessionEvent,
+            ]
+          : []),
+      ];
+      events.forEach((event, index) => parent.observe(stampTestEvent(event, index)));
+      [
+        ...testTurnFacts(0, "Linked work.", ["d_0"]),
+        ...testTurnFacts(1, "Other work.", ["d_1"]),
+      ].forEach((event, index) => child.observe(stampTestEvent(event, index)));
+      parent.observeAgent("child", {
+        status: "caught-up",
+        conversation: child.state,
+        caughtUp: true,
+        position: child.view.position,
+      });
+      const snapshot: SessionStoreSnapshot = {
+        ...parent.state,
+        error: undefined,
+        events: [],
+        session: undefined,
+        status: "busy",
+      };
+      const transcript = new ConversationTranscript();
+      transcript.project(conversationView(snapshot, tuiSessionData(parent.state)), OPTIONS);
+      expect(transcript.tasks).toHaveLength(1);
+      expect(transcript.tasks[0]?.step).toBe(linked ? "Linked work." : "Other work.");
+    },
+  );
+
   it("shows one cancellation after the last piece of a turn split by a follow-up", () => {
     const scope = { turnId: "turn_0", runId: "run_followup" };
     const blocks = project([

@@ -10,7 +10,6 @@ it.each([
   const payload = {};
   const admission = admitDeliveries({
     channelKind: "channel:test",
-    sessionStarted: true,
     status: () => status,
     delivery: {
       kind: "deliver",
@@ -49,7 +48,6 @@ it("takes answer provenance from admission, not helper fields returned by a deli
   };
   const admitted = admitDeliveries({
     channelKind: "channel:test",
-    sessionStarted: true,
     delivery: {
       kind: "deliver",
       auth: alice,
@@ -79,7 +77,6 @@ it("keeps turn context a server's onMessage supplied out of the public admission
   const payload = attachClientContext({}, ["Verified plan: hobby"]);
   const admitted = admitDeliveries({
     channelKind: "eve",
-    sessionStarted: true,
     delivery: {
       kind: "deliver",
       auth: null,

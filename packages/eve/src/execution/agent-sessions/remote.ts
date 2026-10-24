@@ -95,6 +95,8 @@ const UNKNOWN_REMOTE_OUTCOME =
 
 type RemoteAgentSessionCoordinates = {
   readonly sessionId: string;
+  /** The first message's delivery, which earlier-protocol receivers don't name. */
+  readonly deliveryId?: string;
   /** The child's protocol, when it speaks an earlier one: its result arrives, nothing else. */
   readonly earlierProtocol?: number;
 };
@@ -233,9 +235,11 @@ export async function startRemoteAgentSession(input: {
     );
   }
 
-  return receiverVersion === REMOTE_AGENT_PROTOCOL_VERSION
-    ? { sessionId: parsed.data.sessionId }
-    : { earlierProtocol: receiverVersion, sessionId: parsed.data.sessionId };
+  if (receiverVersion !== REMOTE_AGENT_PROTOCOL_VERSION)
+    return { earlierProtocol: receiverVersion, sessionId: parsed.data.sessionId };
+  return "deliveryId" in parsed.data
+    ? { deliveryId: parsed.data.deliveryId, sessionId: parsed.data.sessionId }
+    : { sessionId: parsed.data.sessionId };
 }
 
 /** A receiver that speaks another protocol version rejects the create with its own version. */
@@ -311,11 +315,12 @@ export async function continueRemoteAgentSession(input: {
     readonly token: string;
     readonly url: string;
   };
+  readonly earlierProtocol?: number;
   readonly message: MessageContent<string | URL>;
   readonly outputSchema?: JsonObject;
   readonly remote: ResolvedRuntimeRemoteAgentNode;
   readonly sessionId: string;
-}): Promise<void> {
+}): Promise<{ readonly sessionId: string; readonly deliveryId?: string }> {
   const forwardedPrincipal = buildForwardedPrincipalField(input);
   const requestBody: {
     callback: typeof input.callback;
@@ -330,7 +335,6 @@ export async function continueRemoteAgentSession(input: {
   if (forwardedPrincipal !== undefined) {
     requestBody.forwardedPrincipal = forwardedPrincipal;
   }
-
   const response = await fetch(createRemoteAgentContinueUrl(input.remote, input.sessionId), {
     body: JSON.stringify(requestBody),
     headers: {
@@ -349,6 +353,15 @@ export async function continueRemoteAgentSession(input: {
       `Remote agent "${input.remote.name}" continue-session request failed with HTTP ${response.status}.${compatibilityHint}`,
     );
   }
+  // An earlier-protocol receiver's reply isn't read: it names no delivery the parent records.
+  if (input.earlierProtocol !== undefined) return { sessionId: input.sessionId };
+  const receipt = DeliveryReceiptResponseSchema.safeParse(await response.json().catch(() => null));
+  if (!receipt.success) {
+    throw new Error(
+      `Remote agent "${input.remote.name}" continue-session response was not a delivery receipt. The message may have been accepted.`,
+    );
+  }
+  return { deliveryId: receipt.data.deliveryId, sessionId: receipt.data.sessionId };
 }
 
 function buildForwardedPrincipalField(input: {

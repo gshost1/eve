@@ -17,6 +17,7 @@ import { createTurnControl, type TurnControl } from "#execution/session/turn-con
 import type { SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { decodeSessionInboxPayload } from "#execution/session-inbox/protocol.js";
 import {
+  isAgentSessionMessage,
   runMessageBatchBudget,
   type WorkflowToolRunMessage,
 } from "#execution/tools/workflow/messages.js";
@@ -170,14 +171,16 @@ export class ActiveTurn {
 
   /**
    * Removes the admitted run messages the session applies at once instead of
-   * in a runtime wait, or only those of `kind`.
+   * in a runtime wait, or only those `only` accepts.
    */
-  takeBoundaryMessages(kind?: "agent-started"): WorkflowToolRunMessage[] {
+  takeBoundaryMessages(
+    only?: (message: WorkflowToolRunMessage) => boolean,
+  ): WorkflowToolRunMessage[] {
     const taken: WorkflowToolRunMessage[] = [];
     const kept: RuntimeEvent[] = [];
     for (const event of this.runtimeResults) {
       const message = asBoundaryMessage(event);
-      if (message === undefined || (kind !== undefined && message.kind !== kind)) kept.push(event);
+      if (message === undefined || (only !== undefined && !only(message))) kept.push(event);
       else taken.push(message);
     }
     this.runtimeResults.splice(0, this.runtimeResults.length, ...kept);
@@ -369,9 +372,9 @@ function asBoundaryMessage(event: RuntimeEvent): WorkflowToolRunMessage | undefi
   // Tasks run beside the turn, so everything their runs send, such as a
   // question, reaches the session at the next boundary rather than at turn end.
   if (event.message.from.taskId !== undefined) return event.message;
-  // An `execute` run can open a session after its call returns, when the turn
-  // may have no wait left to take the message, and publishing it needs none.
-  if (event.message.kind === "agent-started") return event.message;
+  // An `execute` run can open or message a session after its call returns, when
+  // the turn may have no wait left to take the message, and publishing it needs none.
+  if (isAgentSessionMessage(event.message)) return event.message;
   return undefined;
 }
 

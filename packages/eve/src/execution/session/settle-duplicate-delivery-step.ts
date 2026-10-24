@@ -24,7 +24,6 @@ export async function settleDuplicateDeliveryStep(
           ? []
           : [{ payload, input: undefined }];
       }),
-      sessionStarted: true,
     });
     return publishSessionEvents(
       state,

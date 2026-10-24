@@ -14,6 +14,7 @@ import {
   sendAgentSessionMessageStep,
   stopLateAgentSessionStep,
   type AgentSessionMessage,
+  type AgentSessionReceipt,
   type OpenedAgentSession,
 } from "#execution/agent-sessions/steps.js";
 import type { RunUsageTally } from "#execution/agent-sessions/usage.js";
@@ -127,8 +128,6 @@ class RunAgentSession implements AgentSession {
         message,
         outputSchema,
         replyTo: reply.hook.token,
-        // The run's current call: a serving run forwards each call it receives.
-        servedCallId: this.#run.from.callId,
       });
     } catch (error) {
       this.#awaited.splice(this.#awaited.indexOf(reply), 1);
@@ -220,14 +219,41 @@ class RunAgentSession implements AgentSession {
     }
   }
 
+  /** The run records each accepted delivery for the call it serves as it sends. */
   async #deliver(message: AgentSessionMessage): Promise<void> {
+    const { from } = this.#run;
+    let receipt: AgentSessionReceipt;
     if (this.#opened === undefined) {
-      this.#opened = this.#open(message);
-      await this.#opened;
-      return;
+      const opening = this.#open(message);
+      this.#opened = opening.then(({ opened }) => opened);
+      // `opening` reports a failed open to this send; later sends read it from `#opened`.
+      this.#opened.catch(() => undefined);
+      ({ receipt } = await opening);
+    } else {
+      const opened = await this.#opened;
+      receipt = await sendAgentSessionMessageStep({ ...message, ...opened });
+      if (receipt.sessionId !== opened.address.sessionId) {
+        const redirected = {
+          ...opened,
+          address: { ...opened.address, sessionId: receipt.sessionId },
+        };
+        this.#opened = Promise.resolve(redirected);
+        this.#sessions.push(redirected);
+        await this.#run.owner.send({
+          context: opened.context,
+          from,
+          kind: "agent-started",
+          session: redirected.address,
+        });
+      }
     }
-    const opened = await this.#opened;
-    await sendAgentSessionMessageStep({ ...message, ...opened });
+    if (receipt.deliveryId === undefined) return;
+    await this.#run.owner.send({
+      deliveryId: receipt.deliveryId,
+      from,
+      kind: "agent-sent",
+      sessionId: receipt.sessionId,
+    });
   }
 
   /**
@@ -235,11 +261,13 @@ class RunAgentSession implements AgentSession {
    * and trace come from that call, and its later messages keep them even when
    * the run serves another call by then; each message carries its own auth.
    */
-  async #open(message: AgentSessionMessage): Promise<OpenedAgentSession> {
+  async #open(
+    message: AgentSessionMessage,
+  ): Promise<{ readonly opened: OpenedAgentSession; readonly receipt: AgentSessionReceipt }> {
     const { agentContext: context, from } = this.#run;
     let opened: OpenedAgentSession | undefined;
     try {
-      const address = await openAgentSessionStep({
+      const { address, deliveryId } = await openAgentSessionStep({
         ...message,
         context,
         key: this.#key,
@@ -249,7 +277,7 @@ class RunAgentSession implements AgentSession {
       opened = { address, context, key: this.#key };
       this.#sessions.push(opened);
       await this.#run.owner.send({ context, from, kind: "agent-started", session: address });
-      return opened;
+      return { opened, receipt: { deliveryId, sessionId: address.sessionId } };
     } catch (error) {
       this.#opened = undefined;
       if (opened !== undefined) await stopLateAgentSessionStep(opened).catch(() => undefined);

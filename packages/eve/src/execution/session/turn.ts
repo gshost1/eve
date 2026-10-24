@@ -35,7 +35,10 @@ import {
   type AppliedRunMessage,
 } from "#execution/tools/workflow/apply-run-messages-step.js";
 import { interruptWorkflowToolRun } from "#execution/tools/workflow/interrupt.js";
-import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
+import {
+  isAgentSessionMessage,
+  type WorkflowToolRunMessage,
+} from "#execution/tools/workflow/messages.js";
 import type { TurnPause } from "#execution/session/pending-turn-state.js";
 import type {
   RuntimeActionResultStepInput,
@@ -142,8 +145,9 @@ export class SessionExecution {
   /**
    * Applies what runs reported while the model step ran, so the next step sees
    * it. Consecutive messages the session applies as it reads them, such as a
-   * fan-out's, share one step. An ending session drops `agent-started`: its
-   * stream is closed, and finalizing the session terminates the children.
+   * fan-out's, share one step. An ending session drops its runs' agent session
+   * messages: its stream is closed, and finalizing the session terminates the
+   * children.
    */
   private async handleBoundaryMessages(
     messages: readonly WorkflowToolRunMessage[],
@@ -156,7 +160,7 @@ export class SessionExecution {
         await this.applyRunMessages(applied, turn);
         applied = [];
         await handleWorkflowToolRunMessage({ cursor: this.input.cursor, message });
-      } else if (!ending || message.kind !== "agent-started") {
+      } else if (!ending || !isAgentSessionMessage(message)) {
         applied.push(message);
       }
     }
@@ -408,7 +412,7 @@ export class SessionExecution {
   /** `session.cancel()` stops the turn, the calls it waits on, and every working task. */
   private async finishCancelledTurn(turn: ActiveTurn): Promise<TurnOutcome> {
     // A child a run opened before the cancel appears before its task settles as cancelled.
-    await this.handleBoundaryMessages(turn.takeBoundaryMessages("agent-started"));
+    await this.handleBoundaryMessages(turn.takeBoundaryMessages(isAgentSessionMessage));
     await this.cancelTurnWork();
     const by = turn.cancelledBy;
     return by === undefined

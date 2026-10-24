@@ -71,6 +71,8 @@ export type {
 export type {
   ChildOpenedData,
   ChildOpened,
+  ChildSentData,
+  ChildSent,
   ChildFact,
 } from "#protocol/session-events/families/child.js";
 

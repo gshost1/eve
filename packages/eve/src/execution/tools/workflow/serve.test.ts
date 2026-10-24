@@ -29,7 +29,12 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (input: { readonly context: AgentSessionContext; readonly name: string }) => Promise<unknown>
     >(),
-  sendAgent: vi.fn<(input: { readonly context: AgentSessionContext }) => Promise<void>>(),
+  sendAgent:
+    vi.fn<
+      (input: {
+        readonly context: AgentSessionContext;
+      }) => Promise<{ sessionId: string; deliveryId: string }>
+    >(),
   serve: vi.fn(),
   sleep: vi.fn<(ms: number) => Promise<void>>(),
   wakeCommands: () => {},
@@ -173,16 +178,20 @@ it("serves every call to its task, one stretch of work at a time, until the sess
     },
   );
   mocks.openAgent.mockImplementation(async ({ name }) => ({
-    kind: "local",
-    name,
-    nodeId: name,
-    sessionId: `${name}-session`,
+    address: { kind: "local", name, nodeId: name, sessionId: `${name}-session` },
+    deliveryId: `${name}-opening`,
   }));
+  mocks.sendAgent.mockResolvedValue({
+    deliveryId: "reviewer-follow-up",
+    sessionId: "reviewer-replacement",
+  });
   const started = startServeBody(input);
 
   await vi.waitFor(() => expect(pendings).toHaveLength(2));
   started.control.apply(call("call-2", "Add a rollback step."));
-  await vi.waitFor(() => expect(mocks.deliver).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() =>
+    expect(mocks.deliver.mock.calls.some(([, message]) => message.kind === "reply")).toBe(true),
+  );
   started.control.apply(call("call-3", "Move it to Friday."));
   await vi.waitFor(() => expect(received).toHaveLength(3));
   started.control.apply({ kind: "cancel", reason: "The task was cancelled." });
@@ -221,6 +230,33 @@ it("serves every call to its task, one stretch of work at a time, until the sess
       output: "revised plan",
       turnId: "turn-call-2",
     },
+  ]);
+  // Each delivery a session accepted is recorded for the call served when it was sent.
+  expect(
+    mocks.deliver.mock.calls.flatMap(([, message]) =>
+      message.kind === "agent-sent"
+        ? [
+            {
+              callId: message.from.callId,
+              deliveryId: message.deliveryId,
+              sessionId: message.sessionId,
+            },
+          ]
+        : [],
+    ),
+  ).toEqual([
+    { callId: "call-1", deliveryId: "reviewer-opening", sessionId: "reviewer-session" },
+    { callId: "call-2", deliveryId: "reviewer-follow-up", sessionId: "reviewer-replacement" },
+    {
+      callId: "call-2",
+      deliveryId: "release-captain-opening",
+      sessionId: "release-captain-session",
+    },
+  ]);
+  expect(sent("agent-started").map(({ session }) => session.sessionId)).toEqual([
+    "reviewer-session",
+    "reviewer-replacement",
+    "release-captain-session",
   ]);
   // Questions, sign-ins, `agent.started`, `ctx.session`, and `ctx.agents`
   // while serving a later call describe that call, not the call that started

@@ -117,11 +117,14 @@ describe("openAgentSessionStep", () => {
     mocks.createSession.mockResolvedValue({ sessionId: "child-1" });
 
     await expect(open()).resolves.toEqual({
-      continuationToken: "subagent:run-1:0",
-      kind: "local",
-      name: "reviewer",
-      nodeId: "reviewer",
-      sessionId: "child-1",
+      address: {
+        continuationToken: "subagent:run-1:0",
+        kind: "local",
+        name: "reviewer",
+        nodeId: "reviewer",
+        sessionId: "child-1",
+      },
+      deliveryId: "agent-session:run-1:0:initial",
     });
     expect(mocks.waitForCommandHookOwner).not.toHaveBeenCalled();
   });
@@ -131,7 +134,7 @@ describe("openAgentSessionStep", () => {
     mocks.createSession.mockResolvedValue({ sessionId: "child-2" });
     mocks.waitForCommandHookOwner.mockResolvedValue({ runId: "child-1" });
 
-    await expect(open()).resolves.toMatchObject({ sessionId: "child-1" });
+    await expect(open()).resolves.toMatchObject({ address: { sessionId: "child-1" } });
     expect(mocks.waitForCommandHookOwner).toHaveBeenCalledWith(
       expect.stringContaining("subagent:run-1:0"),
     );

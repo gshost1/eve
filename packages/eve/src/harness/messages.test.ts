@@ -51,12 +51,11 @@ describe("coalesceDeliveries", () => {
     ).toEqual({
       caller,
       kind: "deliver",
-      payloadCallers: [null, "call-1"],
       payloads: [{ context: ["earlier context"] }, { message: "question" }],
     });
   });
 
-  it("preserves callerless payloads and receipt identities through filtering and rebatching", () => {
+  it("preserves receipt identities through filtering and rebatching", () => {
     const metadata = (deliveryId: string) => ({
       channelKind: "subagent",
       channelName: "research",
@@ -66,7 +65,7 @@ describe("coalesceDeliveries", () => {
     const batch = coalesceDeliveries<DeliverHookPayload>([
       {
         kind: "deliver" as const,
-        caller: { ...caller, servedCallId: "first" },
+        caller,
         payloads: [{ message: "First." }],
         deliveryMetadata: [metadata("d1")],
       },
@@ -77,7 +76,7 @@ describe("coalesceDeliveries", () => {
       },
       {
         kind: "deliver" as const,
-        caller: { ...caller, servedCallId: "second" },
+        caller,
         payloads: [{ message: "Second." }],
         deliveryMetadata: [metadata("d3")],
       },
@@ -89,7 +88,6 @@ describe("coalesceDeliveries", () => {
     const replayed: typeof selected = JSON.parse(JSON.stringify(selected));
     const latest = {
       ...caller,
-      servedCallId: "third",
       replyTo: { kind: "hook" as const, token: "third-reply" },
     };
     const result = coalesceDeliveries<DeliverHookPayload>([
@@ -101,7 +99,6 @@ describe("coalesceDeliveries", () => {
         deliveryMetadata: [metadata("d4")],
       },
     ]);
-    expect(result.payloadCallers).toEqual(["second", null, "third"]);
     expect(result.caller).toEqual(latest);
     expect(
       result.deliveryMetadata?.map(({ deliveryId, payloadIndex }) => ({

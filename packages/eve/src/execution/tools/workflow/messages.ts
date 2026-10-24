@@ -84,6 +84,14 @@ export interface WorkflowToolRunAgentStartedMessage {
   readonly context: AgentSessionContext;
 }
 
+/** A delivery a session the run opened accepted, sent for the call the run serves. */
+export interface WorkflowToolRunAgentSentMessage {
+  readonly from: WorkflowToolRunRef;
+  /** The session that accepted the delivery. */
+  readonly sessionId: string;
+  readonly deliveryId: string;
+}
+
 /**
  * A `serve` body's reply, sent once for each `ctx.reply()`. It settles every
  * call the body received since its last reply, so the session settles them
@@ -120,6 +128,7 @@ export interface WorkflowToolRunStartedMessage {
 
 export type WorkflowToolRunMessage =
   | ({ readonly kind: "agent-started" } & WorkflowToolRunAgentStartedMessage)
+  | ({ readonly kind: "agent-sent" } & WorkflowToolRunAgentSentMessage)
   | ({ readonly kind: "started" } & WorkflowToolRunStartedMessage)
   | ({ readonly kind: "report" } & WorkflowToolRunReport)
   | ({ readonly kind: "reply" } & WorkflowToolRunReplyMessage)
@@ -127,6 +136,13 @@ export type WorkflowToolRunMessage =
   | ({ readonly kind: "withdraw" } & WorkflowToolRunWithdrawMessage)
   | ({ readonly kind: "usage" } & WorkflowToolRunUsageMessage)
   | ({ readonly kind: "outcome" } & WorkflowToolRunOutcomeMessage);
+
+/** A run's report of a session it opened or a delivery that session accepted. */
+export function isAgentSessionMessage(
+  message: WorkflowToolRunMessage,
+): message is Extract<WorkflowToolRunMessage, { readonly kind: "agent-started" | "agent-sent" }> {
+  return message.kind === "agent-started" || message.kind === "agent-sent";
+}
 
 /**
  * Messages a run relays to its session in one delivery, in the order its body

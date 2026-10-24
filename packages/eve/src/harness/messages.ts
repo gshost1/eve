@@ -437,7 +437,6 @@ export function userContentOf(message: MessageContent): string | UserContent {
 interface DeliverLike {
   readonly auth?: SessionAuthContext | null;
   readonly caller?: TurnCaller;
-  readonly payloadCallers?: readonly (string | null)[];
   readonly deliveryMetadata?: readonly ChannelDeliveryMetadataEntry[];
   readonly kind: "deliver";
   readonly payloads: readonly DeliverPayload[];
@@ -460,15 +459,6 @@ export function coalesceDeliveries<T extends DeliverLike>(items: readonly T[]): 
     throw new Error("Cannot coalesce an empty delivery batch.");
   }
 
-  const payloadCallers = items.some(
-    (item) => item.caller !== undefined || item.payloadCallers !== undefined,
-  )
-    ? items.flatMap(
-        (item) =>
-          item.payloadCallers ??
-          item.payloads.map(() => item.caller?.servedCallId ?? item.caller?.callId ?? null),
-      )
-    : undefined;
   let auth = first.auth;
   let caller = first.caller;
   const payloads = [...first.payloads];
@@ -500,7 +490,6 @@ export function coalesceDeliveries<T extends DeliverLike>(items: readonly T[]): 
     auth,
     caller,
     deliveryMetadata: deliveryMetadata.length === 0 ? undefined : deliveryMetadata,
-    payloadCallers,
     payloads,
   };
 }
@@ -510,7 +499,6 @@ export function selectDeliveryPayloads<T extends DeliverLike>(
   delivery: T,
   selected: readonly { readonly index: number; readonly payload: DeliverPayload }[],
 ): T {
-  const { payloadCallers } = delivery;
   const metadata = selected.flatMap(({ index }, payloadIndex) =>
     (delivery.deliveryMetadata ?? [])
       .filter((entry) => entry.payloadIndex === index)
@@ -520,9 +508,5 @@ export function selectDeliveryPayloads<T extends DeliverLike>(
     ...delivery,
     payloads: selected.map(({ payload }) => payload),
     deliveryMetadata: metadata.length === 0 ? undefined : metadata,
-    payloadCallers:
-      payloadCallers === undefined
-        ? undefined
-        : selected.map(({ index }) => payloadCallers[index] ?? null),
   };
 }

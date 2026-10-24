@@ -30,8 +30,9 @@ import {
 } from "#internal/testing/approval-resume.js";
 import { buildSerializedContext } from "#internal/testing/entry-test-helpers.js";
 import { captureTurnEvents } from "#internal/testing/events.js";
-import { getWorld, resumeHook } from "#internal/workflow/runtime.js";
+import { getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
+import type { SessionUsageLimit } from "#shared/agent-definition.js";
 import { readSessionEventHistory } from "#execution/session-event-stream.js";
 import { viewOfEvents } from "#protocol/session-projection/fold.js";
 import { failure } from "#protocol/session-projection/selectors.js";
@@ -45,7 +46,10 @@ import {
   defineWorkflowTool,
   type WorkflowExecuteToolDefinition,
 } from "#tools/workflow-definition.js";
-import { waitingForCleanupWorkflow } from "#internal/testing/workflow-tool-fixtures.js";
+import {
+  receiveDelegatedResultWorkflow,
+  waitingForCleanupWorkflow,
+} from "#internal/testing/workflow-tool-fixtures.js";
 
 // Sessions driven through their odd paths: tools that fail, approvals that are cancelled,
 // steered, answered twice or for nothing, models that fail mid-response, and controls that
@@ -284,6 +288,7 @@ async function withSession(
     readonly model: MockLanguageModelV4;
     readonly hooks?: Readonly<Record<string, HookDefinition>>;
     readonly parent?: SessionParent;
+    readonly sessionUsage?: SessionUsageLimit;
   },
   body: (session: Session) => Promise<void>,
 ) {
@@ -293,6 +298,9 @@ async function withSession(
     agent: {
       definition: defineAgent({
         model: defineDynamic(() => ({ model: options.model, modelContextWindowTokens: 200_000 })),
+        ...(options.sessionUsage !== undefined && {
+          limits: { sessionUsage: options.sessionUsage },
+        }),
       }),
       name,
     },
@@ -433,7 +441,6 @@ async function withSession(
             caller: {
               callId: parent.callId,
               replyTo: { kind: "hook", token: `${name}:${callId}:reply` },
-              servedCallId: callId,
               subagentName: name,
             },
             delivery: createChannelDeliveryMetadata({
@@ -873,9 +880,9 @@ describe("calls in flight", () => {
     );
     expect(received).toHaveLength(3);
     expect(received.map((delivery) => delivery.source)).toEqual([
-      { channel: "subagent", caller: { callId: "deployment-check", sessionId: "parent" } },
+      { channel: "subagent" },
       { channel: "http" },
-      { channel: "subagent", caller: { callId: "database-check", sessionId: "parent" } },
+      { channel: "subagent" },
     ]);
     expect(received.map((delivery) => [delivery.turnId, delivery.outcome])).toEqual([
       ["turn_0", "handled"],
@@ -1607,7 +1614,7 @@ describe("work delegated to a child session", () => {
 });
 
 describe("deliveries a child session reads", () => {
-  it("name the call each serves, a follow-up's own call included", async () => {
+  it("are linked to the parent call each serves, a follow-up's own call included", async () => {
     let childEvents: SessionStreamEvent[] = [];
     const { events } = await withSession(
       "edge-child-callers",
@@ -1653,14 +1660,69 @@ describe("deliveries a child session reads", () => {
       },
     );
 
+    const [opened] = ofType(events, "child.opened");
     expect(ofType(events, "child.opened")).toHaveLength(1);
-    expect(
-      ofType(childEvents, "delivery.admitted").map((event) =>
-        event.data.source !== undefined && "caller" in event.data.source
-          ? event.data.source.caller?.callId
-          : undefined,
-      ),
-    ).toEqual(["call_one", "call_two"]);
+    expect(ofType(events, "child.sent").map((event) => event.data)).toEqual(
+      ofType(childEvents, "delivery.admitted").map((event, index) => ({
+        callId: ["call_one", "call_two"][index],
+        childDeliveryId: event.data.deliveryId,
+        sessionId: opened!.data.sessionId,
+      })),
+    );
+    expect(ofType(childEvents, "delivery.admitted")).toHaveLength(2);
+  });
+
+  it("replies to the latest forwarded caller when a cancel leaves its queued message unread", async () => {
+    const name = "edge-cancel-unread-forward";
+    let reply: Promise<unknown> | undefined;
+    const { events } = await withSession(
+      name,
+      {
+        message: "Review the release notes.",
+        parent: {
+          callId: "opening",
+          rootSessionId: "parent",
+          sessionId: "parent",
+          turn: { id: "parent-turn", sequence: 1 },
+        },
+        // The first model call spends past the limit, so the turn waits on a continuation prompt.
+        sessionUsage: ({ window }) => window.inputTokens > 0,
+        model: scriptedModel(({ results }) =>
+          results.length === 0 ? [{ toolName: "review_notes" }] : "Reviewed.",
+        ),
+        tools: [{ name: "review_notes" }],
+      },
+      async (session) => {
+        await session.until(
+          "continuation prompt",
+          (event) => event.type === "interaction.opened" && event.data.request.kind === "budget",
+        );
+        const receiver = await start(receiveDelegatedResultWorkflow, [`${name}:follow-up:reply`]);
+        reply = receiver.returnValue;
+        await session.forward("follow-up", "Also check the changelog.");
+        await session.until(
+          "follow-up queued",
+          (event) =>
+            event.type === "delivery.admitted" && event.data.deliveryId !== "delivery-initial",
+        );
+        await session.control("cancel");
+        let cancelled = false;
+        await session.until("cancelled", (event) => {
+          cancelled ||= event.type === "turn.settled";
+          return cancelled && event.meta.endOfLine !== false;
+        });
+      },
+    );
+
+    const followUp = ofType(events, "delivery.admitted").find(
+      (event) => event.data.deliveryId !== "delivery-initial",
+    )!.data.deliveryId;
+    expect(ofType(events, "delivery.settled").map((event) => event.data)).toContainEqual(
+      expect.objectContaining({ deliveryId: followUp, outcome: "ignored" }),
+    );
+    await expect(
+      Promise.race([reply, new Promise((resolve) => setTimeout(resolve, 5_000, "no reply"))]),
+    ).resolves.toMatchObject({ kind: "runtime-action-result" });
   });
 });
 

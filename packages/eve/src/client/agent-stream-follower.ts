@@ -278,7 +278,7 @@ export class AgentStreamFollower {
         if (!reachedTail)
           throw new Error("The descendant stream disconnected before its captured tail.");
         node.caughtUp = true;
-        node.status = "idle";
+        node.status = "caught-up";
         node.failures = 0;
         node.idleReads = conversation.view.position === before ? node.idleReads + 1 : 0;
         node.readyAt = Date.now() + Math.min(10_000, 1000 * 2 ** Math.min(node.idleReads, 4));

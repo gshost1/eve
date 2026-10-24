@@ -1,9 +1,4 @@
-import type {
-  DeliverHookPayload,
-  DeliverPayload,
-  SessionAuthContext,
-  SessionParent,
-} from "#channel/types.js";
+import type { DeliverHookPayload, DeliverPayload, SessionAuthContext } from "#channel/types.js";
 import type { ConsumedDelivery } from "#harness/session-machine/transitions.js";
 import type { HarnessStepInput, StepInput } from "#harness/types.js";
 import { defined, fact } from "#harness/facts.js";
@@ -37,8 +32,6 @@ export function admitDeliveries(input: {
   /** The delivery's recorded status, including facts an interrupted attempt already wrote. */
   readonly status?: (deliveryId: string) => DeliveryRow["status"] | undefined;
   readonly channelKind: string;
-  readonly parent?: SessionParent;
-  readonly sessionStarted: boolean;
 }): DeliveryAdmission {
   const { delivery } = input;
   const facts: SessionEvent[] = [];
@@ -52,18 +45,9 @@ export function admitDeliveries(input: {
         "Session delivery has no identity. Assign delivery metadata at dispatch before admission.",
       );
     const deliveryId = metadata.deliveryId;
-    const servedCall =
-      delivery.payloadCallers === undefined
-        ? (delivery.caller?.servedCallId ?? delivery.caller?.callId)
-        : (delivery.payloadCallers[index] ?? undefined);
-    const callId = servedCall ?? (input.sessionStarted ? undefined : input.parent?.callId);
     const source: DeliverySource = defined({
-      channel: metadata?.channelKind ?? input.channelKind,
+      channel: metadata.channelKind ?? input.channelKind,
       scheduleId: delivery.schedule?.definition,
-      caller:
-        input.parent === undefined || callId === undefined
-          ? undefined
-          : { sessionId: input.parent.sessionId, callId },
     });
     // Turn context stays out of facts: stream readers may see it, and the turn reads it from
     // the payload and its private state instead.

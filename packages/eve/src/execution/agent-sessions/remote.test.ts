@@ -272,13 +272,15 @@ describe("startRemoteAgentSession", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await startRemoteAgentSession({
-      action: createAction(),
-      callbackBaseUrl: "https://caller.example.com",
-      operationId: "operation-1",
-      remote: createRemoteAgent(),
-      session: { continuationToken: "eve:parent-token" },
-    });
+    await expect(
+      startRemoteAgentSession({
+        action: createAction(),
+        callbackBaseUrl: "https://caller.example.com",
+        operationId: "operation-1",
+        remote: createRemoteAgent(),
+        session: { continuationToken: "eve:parent-token" },
+      }),
+    ).resolves.toEqual({ deliveryId: "delivery:operation-1", sessionId: "remote-session" });
 
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
       operationId: "operation-1",
@@ -1007,12 +1009,76 @@ describe("continueRemoteAgentSession", () => {
     vi.unstubAllGlobals();
   });
 
-  it("posts raw continuation input with callback metadata and fresh auth headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([1, 2])(
+    "posts an earlier-protocol %i continuation without requiring a receipt",
+    async (earlierProtocol) => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
 
-    await continueRemoteAgentSession({
-      auth: null,
+      await continueRemoteAgentSession({
+        earlierProtocol,
+        auth: null,
+        callback: {
+          callId: "call-next",
+          subagentName: "research",
+          token: "parent-inbox",
+          url: "https://caller.example.com/eve/v1/callback/parent-inbox",
+        },
+        message: "follow up",
+        outputSchema: { type: "object" },
+        remote: createRemoteAgent(),
+        sessionId: "remote-session",
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://remote.example.com/eve/v1/session/remote-session",
+        {
+          body: JSON.stringify({
+            callback: {
+              callId: "call-next",
+              subagentName: "research",
+              token: "parent-inbox",
+              url: "https://caller.example.com/eve/v1/callback/parent-inbox",
+            },
+            message: "follow up",
+            outputSchema: { type: "object" },
+          }),
+          headers: {
+            authorization: "Bearer remote-token",
+            "content-type": "application/json",
+            "x-static": "yes",
+          },
+          method: "POST",
+        },
+      );
+    },
+  );
+
+  it("returns the accepted delivery for a current-protocol continuation without adding retry fields", async () => {
+    const receipt = { deliveryId: "delivery:accepted", ok: true, sessionId: "remote-session" };
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      Response.json(receipt, { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const send = () =>
+      continueRemoteAgentSession({
+        auth: null,
+        callback: {
+          callId: "call-next",
+          subagentName: "research",
+          token: "parent-inbox",
+          url: "https://caller.example.com/eve/v1/callback/parent-inbox",
+        },
+        message: "follow up",
+        remote: createRemoteAgent(),
+        sessionId: "remote-session",
+      });
+
+    await expect(send()).resolves.toEqual({
+      deliveryId: "delivery:accepted",
+      sessionId: "remote-session",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
       callback: {
         callId: "call-next",
         subagentName: "research",
@@ -1020,36 +1086,25 @@ describe("continueRemoteAgentSession", () => {
         url: "https://caller.example.com/eve/v1/callback/parent-inbox",
       },
       message: "follow up",
-      outputSchema: { type: "object" },
-      remote: createRemoteAgent(),
-      sessionId: "remote-session",
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://remote.example.com/eve/v1/session/remote-session",
-      {
-        body: JSON.stringify({
-          callback: {
-            callId: "call-next",
-            subagentName: "research",
-            token: "parent-inbox",
-            url: "https://caller.example.com/eve/v1/callback/parent-inbox",
-          },
-          message: "follow up",
-          outputSchema: { type: "object" },
-        }),
-        headers: {
-          authorization: "Bearer remote-token",
-          "content-type": "application/json",
-          "x-static": "yes",
-        },
-        method: "POST",
-      },
+    fetchMock.mockImplementation(async () => new Response(null, { status: 202 }));
+    await expect(send()).rejects.toThrow(
+      "was not a delivery receipt. The message may have been accepted.",
     );
   });
 
   it("forwards only the current turn principal when continuation forwarding is enabled", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json(
+        {
+          ok: true,
+          sessionId: "remote-session",
+          deliveryId: "delivery:accepted",
+        },
+        { status: 202 },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const current: SessionAuthContext = {
       attributes: { user_id: "U456" },

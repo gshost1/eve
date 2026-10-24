@@ -7,6 +7,7 @@ import { withSessionStateDelta } from "#execution/session/step-state-delta.js";
 import { applyTaskRunMessage, type TaskRunMessage } from "#execution/tasks/steps.js";
 import { isActiveTaskRun, readTaskTable } from "#execution/tasks/table.js";
 import type {
+  WorkflowToolRunAgentSentMessage,
   WorkflowToolRunAgentStartedMessage,
   WorkflowToolRunMessage,
   WorkflowToolRunRef,
@@ -81,9 +82,23 @@ async function childOpenedEvent(
   };
 }
 
+function childSentEvent({
+  deliveryId,
+  from,
+  sessionId,
+}: WorkflowToolRunAgentSentMessage): SessionEvent {
+  const scope: { turnId: string; taskId?: string } = { turnId: from.turnId };
+  if (from.taskId !== undefined) scope.taskId = from.taskId;
+  return {
+    data: { callId: from.callId, childDeliveryId: deliveryId, sessionId },
+    scope,
+    type: "child.sent",
+  };
+}
+
 /** A run's message the session applies as it reads it, which answers no call a turn waits on. */
 export type AppliedRunMessage =
-  | Extract<WorkflowToolRunMessage, { readonly kind: "agent-started" | "report" }>
+  | Extract<WorkflowToolRunMessage, { readonly kind: "agent-started" | "agent-sent" | "report" }>
   // Only a task's run reports these to the task table; an `execute` run's outcome answers its call.
   | (TaskRunMessage & { readonly from: { readonly taskId: string } });
 
@@ -133,6 +148,8 @@ export async function applyRunMessagesStep(
         } else {
           events.push(await childOpenedEvent(state.sessionState.sessionId, message));
         }
+      } else if (message.kind === "agent-sent") {
+        if (!ended) events.push(childSentEvent(message));
       } else if (message.kind === "report") {
         if (!ended)
           events.push(...workflowToolRunReportEvents(state, message.from, message.update));

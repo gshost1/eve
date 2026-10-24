@@ -29,6 +29,8 @@
   "ChildObservation",
   "ChildOpened",
   "ChildOpenedData",
+  "ChildSent",
+  "ChildSentData",
   "ClearedBy",
   "ContentCompleted",
   "ContentCompletedData",

@@ -413,6 +413,16 @@ describe("the shared fold", () => {
             scope,
             type: "call.requested",
           },
+          {
+            data: { name: "helper", owner: { callId: "c_0" }, sessionId: "child", stream: "" },
+            scope,
+            type: "child.opened",
+          },
+          {
+            data: { callId: "c_0", childDeliveryId: "child_delivery", sessionId: "child" },
+            scope,
+            type: "child.sent",
+          },
           { data: { outcome: "completed", runId: "run_0" }, scope, type: "model.settled" },
         ],
       },
@@ -423,6 +433,11 @@ describe("the shared fold", () => {
     expect(view.calls.c_0?.status).toBe("requested");
     expect(view.runs.run_0?.status).toBe("settled");
     expect(view.turns.turn_0).toBeDefined();
+    expect(view.children.child).toBeDefined();
+    expect(view.children.child?.deliveries).toBeUndefined();
+    expect(folded(lines).children.child?.deliveries).toEqual([
+      { callId: "c_0", deliveryId: "child_delivery" },
+    ]);
   });
 
   it("keeps an idle task without the call that started it, so its payloads don't pile up", () => {

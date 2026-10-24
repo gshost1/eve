@@ -8,6 +8,7 @@ export { AgentInfoResponseError } from "#client/agent-info-error.js";
 export { HealthResponseError } from "#client/health-response-error.js";
 export { ClientError, ClientSessionStrandedError } from "#client/client-error.js";
 export { conversationOf } from "#client/conversation.js";
+export { agentCallActivity } from "#client/conversation-state.js";
 export {
   transcriptOf,
   type TranscriptData,
@@ -16,6 +17,9 @@ export {
 } from "#client/transcript.js";
 
 export type {
+  AgentCallActivity,
+  AgentCallDelivery,
+  AgentCallSession,
   AgentObservation,
   AgentObservationReason,
   FollowAgents,

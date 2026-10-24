@@ -12,8 +12,22 @@ export interface ChildOpenedData {
   readonly stream: string;
 }
 
+/**
+ * A delivery a child session accepted for one of this session's calls. The child's own stream
+ * records the delivery's lifecycle as its `deliveryId`.
+ */
+export interface ChildSentData {
+  /** The child session that accepted the delivery. */
+  readonly sessionId: string;
+  /** The delivery's id in the child's stream, not one of this session's deliveries. */
+  readonly childDeliveryId: string;
+  /** The call the delivery was sent for. */
+  readonly callId: string;
+}
+
 export type ChildOpened = Envelope<"child.opened", ChildOpenedData>;
-export type ChildFact = ChildOpened;
+export type ChildSent = Envelope<"child.sent", ChildSentData>;
+export type ChildFact = ChildOpened | ChildSent;
 
 export const childSchemas = {
   "child.opened": envelopeOf(
@@ -26,5 +40,9 @@ export const childSchemas = {
         stream: z.string(),
       }),
     ),
+  ),
+  "child.sent": envelopeOf(
+    "child.sent",
+    conforming<ChildSentData>()(z.object({ callId: id, childDeliveryId: id, sessionId: id })),
   ),
 };

@@ -255,7 +255,7 @@ describe("the React binding", () => {
         await vi.advanceTimersByTimeAsync(250);
       });
       expect(helpers?.agents.child?.observation).toMatchObject({
-        status: "idle",
+        status: "caught-up",
         caughtUp: true,
         position: 2,
       });

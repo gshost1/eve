@@ -1,4 +1,7 @@
 [
+  "AgentCallActivity",
+  "AgentCallDelivery",
+  "AgentCallSession",
   "AgentInfoChannelEntry",
   "AgentInfoChannels",
   "AgentInfoConnectionEntry",
@@ -69,6 +72,7 @@
   "TranscriptData",
   "TranscriptMessage",
   "TranscriptOptions",
+  "agentCallActivity",
   "conversationOf",
   "endsTurn",
   "failureOf",

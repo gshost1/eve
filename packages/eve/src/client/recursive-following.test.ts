@@ -129,7 +129,7 @@ describe("recursive child observations", () => {
         const desk = conversation(f.store.snapshot.agents.desk!.observation);
         const reviewer = conversation(desk.agents.reviewer!.observation);
         const query = reviewer.agents.query!.observation;
-        expect(query).toMatchObject({ status: "idle", position: 1, caughtUp: true });
+        expect(query).toMatchObject({ status: "caught-up", position: 1, caughtUp: true });
         expect(conversation(query).messages.at(-1)?.parts).toContainEqual(
           expect.objectContaining({ type: "text", text: "Evidence." }),
         );
@@ -218,11 +218,11 @@ describe("recursive child observations", () => {
     const stop = f.start();
     await vi.advanceTimersByTimeAsync(0);
     const before = f.store.snapshot.agents.reviewer!.observation;
-    expect(before).toMatchObject({ status: "idle", position: 1, caughtUp: true });
+    expect(before).toMatchObject({ status: "caught-up", position: 1, caughtUp: true });
     f.logs.get("reviewer")!.push(...linesOf(testTurnFacts(1, "Second.", ["two"]), at));
     await vi.advanceTimersByTimeAsync(1000);
     const after = f.store.snapshot.agents.reviewer!.observation;
-    expect(after).toMatchObject({ status: "idle", position: 2, caughtUp: true });
+    expect(after).toMatchObject({ status: "caught-up", position: 2, caughtUp: true });
     expect(conversation(before).messages).toHaveLength(2);
     expect(conversation(after).messages).toHaveLength(4);
     expect(f.requests.at(-1)?.cursor).toBe(1);
@@ -275,7 +275,7 @@ describe("recursive child observations", () => {
         (side) =>
           conversation(f.store.snapshot.agents[side]!.observation).agents.shared!.observation,
       );
-      expect(observations.every((observation) => observation.status === "idle")).toBe(true);
+      expect(observations.every((observation) => observation.status === "caught-up")).toBe(true);
       expect(conversation(observations[0]!).messages.at(-1)?.parts).toContainEqual(
         expect.objectContaining({ text: "left" }),
       );
@@ -296,7 +296,7 @@ describe("recursive child observations", () => {
     f.start();
     await vi.advanceTimersByTimeAsync(0);
     const observed = f.store.snapshot.agents.child!.observation;
-    expect(observed).toMatchObject({ status: "idle", caughtUp: true, position: 3 });
+    expect(observed).toMatchObject({ status: "caught-up", caughtUp: true, position: 3 });
     expect(position(conversation(observed).view)).toBe(3);
     expect(conversation(observed).messages).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1000);
@@ -357,7 +357,10 @@ describe("recursive child observations", () => {
     }
     await vi.waitFor(() => {
       const shared = conversation(f.store.snapshot.agents.shared!.observation);
-      expect(shared.agents.leaf?.observation).toMatchObject({ status: "idle", caughtUp: true });
+      expect(shared.agents.leaf?.observation).toMatchObject({
+        status: "caught-up",
+        caughtUp: true,
+      });
       expect(conversation(shared.agents.leaf!.observation).messages).toHaveLength(2);
     });
     const leafRead = f.fetcher.mock.calls.find(([input]) => String(input).includes("leaf"));

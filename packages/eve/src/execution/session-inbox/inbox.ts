@@ -497,6 +497,7 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
 export function isWorkflowMessage(value: SessionInboxPayload): value is WorkflowToolRunMessage {
   return (
     value.kind === "agent-started" ||
+    value.kind === "agent-sent" ||
     value.kind === "started" ||
     value.kind === "report" ||
     value.kind === "reply" ||

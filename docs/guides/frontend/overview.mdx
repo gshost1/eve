@@ -229,16 +229,33 @@ const agent = useEveAgent({
 });
 ```
 
-Root depth is zero. eve admits at most 128 child observations per root generation, follows to depth 8, and allows 8 simultaneous descendant reads independently of the root stream. Each read stops at its captured durable tail or yields its slot after 10 seconds. Idle observations are refreshed with delays from 1 to 10 seconds. These bounds do not limit execution or the root transcript. `newSession()` resets admission accounting. The policy is read at store creation and evaluated once per relationship at each known reachable depth; unrelated renders do not replace followers. When authorized readers establish that two paths reach the same session, the store shares its observation and considers both paths' depths.
+Root depth is zero. eve admits at most 128 child observations per root generation, follows to depth 8, and allows 8 simultaneous descendant reads independently of the root stream. Each read stops at its captured durable tail or yields its slot after 10 seconds. Caught-up observations are refreshed with delays from 1 to 10 seconds. These bounds do not limit execution or the root transcript. `newSession()` resets admission accounting. The policy is read at store creation and evaluated once per relationship at each known reachable depth; unrelated renders do not replace followers. When authorized readers establish that two paths reach the same session, the store shares its observation and considers both paths' depths.
 
 Each `agents[sessionId]` describes an opening, with an `owner` naming its call or task. A followed `observation.conversation` has its own `agents`, `messages`, and opaque `view`. Calls that continue a task reuse its child conversation; the opening owner does not change. Read the particular call or delivery's settled result for its outcome, not the child's latest message.
+
+To show what one call caused in a child it shares with other calls, use `agentCallActivity(state, callId)` from `eve/client`. It follows the `child.sent` links the parent recorded to each delivery the call sent and the child turns that consumed them:
+
+```ts
+import { agentCallActivity } from "eve/client";
+
+const activity = agentCallActivity(agent, callId);
+if (activity.status === "linked") {
+  for (const { sessionId, deliveries, turns } of activity.sessions) {
+    const pending = deliveries.some(({ status }) => status !== "settled");
+    const turnIds = new Set(turns.map(({ turnId }) => turnId));
+    // Render agent.agents[sessionId]'s messages whose metadata.turnId is in turnIds.
+  }
+}
+```
+
+A delivery's `status` is `"unseen"` until this reader reads the child's admission, then the child's own `"admitted"`, `"consumed"`, or `"settled"`. Several calls can reach one turn, as when a call arrives while the agent works; each turn lists the other calls it answered in `sharedWith`, so render it once for all of them rather than splitting it. `"unlinked"` means the parent recorded no delivery for the call, as for a call that sent nothing or reached a remote agent on an earlier protocol.
 
 | Observation status | Meaning                                                                                                                      |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `"not-followed"`   | Following is disabled, or `reason` identifies a predicate, depth/session limit, or cycle.                                    |
 | `"queued"`         | Admitted and waiting for a read slot.                                                                                        |
 | `"following"`      | Reading a finite captured prefix. Silence does not imply settlement.                                                         |
-| `"idle"`           | Reached the tail captured for this read; another read can discover more activity.                                            |
+| `"caught-up"`      | Reached the tail captured for this read; the child may still be working, and another read can discover more activity.        |
 | `"interrupted"`    | A retryable read failure or detached observation scope.                                                                      |
 | `"unavailable"`    | History cannot currently be read. `reason` distinguishes authorization, expiry, unsupported readers, and transport failures. |
 

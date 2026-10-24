@@ -178,7 +178,10 @@ export interface ResponseRow extends Introduced, Ended {
   readonly reason?: string;
 }
 
-export interface ChildRow extends Introduced, ChildOpenedData {}
+export interface ChildRow extends Introduced, ChildOpenedData {
+  /** Deliveries the child accepted for this session's calls, oldest first, from `child.sent`. */
+  readonly deliveries?: readonly { readonly deliveryId: string; readonly callId: string }[];
+}
 
 export interface ChangeRow extends Introduced, Ended {
   readonly changeId: string;
