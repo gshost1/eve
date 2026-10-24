@@ -376,7 +376,7 @@ export default defineWorkflowTool({
 });
 ```
 
-`codeChannel` takes the origin message's `originTs`, its thread's `originThreadTs`, and optionally the channel's `name`; without one, Slack names the channel from the message. The new channel gets the origin's privacy, and its session's audience follows it. When a workflow tool sends it, eve passes the calling session to the Slack channel, which opens the channel only if that session is the one at the origin thread, so a tool can't open a channel from a message in another conversation and copy its transcript there. A route, schedule, or `onEvent` handler has no calling session and can open one from any message the app can see. Pass `history` to start the code channel's session with earlier messages; `open_code_channel` passes the calling session's transcript.
+`codeChannel` takes the origin message's `originTs`, its thread's `originThreadTs`, and optionally the channel's `name`; without one, Slack names the channel from the message. The new channel gets the origin's privacy, and its session's audience follows it. When a workflow tool sends it, eve passes the calling session to the Slack channel, which opens the channel only if that session is the one at the origin thread and the origin message is in that thread (eve checks with `chat.getPermalink`, which needs no extra scopes), so a tool can't open a channel from a message in another conversation and copy its transcript there. A route, schedule, or `onEvent` handler has no calling session and can open one from any message the app can see. Pass `history` to start the code channel's session with earlier messages; `open_code_channel` passes the last 50 messages of the calling session's transcript.
 
 #### Open a code channel from a message hook
 

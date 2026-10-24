@@ -1214,11 +1214,21 @@ async function receiveInNewCodeChannel(
   // A workflow tool's session may only open a code channel from a message in its own
   // conversation, so it can't copy its transcript into someone else's thread. A route,
   // schedule, or event handler has no calling session and names the message itself.
+  const { request } = buildSlackWorkspaceHandle({
+    api: deps.api,
+    botToken: deps.credentials?.botToken,
+    installationTeamId,
+    teamId: deps.teamId,
+  });
   if (input.caller !== undefined) {
     const origin = await deps.resolveSession(
       slackContinuationToken(originChannelId, codeChannel.originThreadTs),
     );
-    if (origin?.id !== input.caller.sessionId) {
+    if (
+      origin?.id !== input.caller.sessionId ||
+      (codeChannel.originTs !== codeChannel.originThreadTs &&
+        !(await isSlackReplyInThread(request, originChannelId, codeChannel)))
+    ) {
       throw Object.assign(
         new Error(
           "This session isn't the conversation of the Slack message it names, so eve won't open a code channel from that message.",
@@ -1227,12 +1237,6 @@ async function receiveInNewCodeChannel(
       );
     }
   }
-  const { request } = buildSlackWorkspaceHandle({
-    api: deps.api,
-    botToken: deps.credentials?.botToken,
-    installationTeamId,
-    teamId: deps.teamId,
-  });
   const opened = await openSlackCodeChannel({
     auth: input.auth,
     installationTeamId,
@@ -1251,6 +1255,28 @@ async function receiveInNewCodeChannel(
     state: opened.state,
     title: input.title,
   });
+}
+
+/**
+ * Whether `originTs` is a reply in `originThreadTs`. A reply's permalink names
+ * its thread, and `chat.getPermalink` needs no scopes, unlike
+ * `conversations.replies`.
+ */
+async function isSlackReplyInThread(
+  request: SlackRequest,
+  channelId: string,
+  target: Pick<SlackCodeChannelTarget, "originThreadTs" | "originTs">,
+): Promise<boolean> {
+  const response = await request("chat.getPermalink", {
+    channel: channelId,
+    message_ts: target.originTs,
+  });
+  if (response.ok !== true || typeof response.permalink !== "string") return false;
+  try {
+    return new URL(response.permalink).searchParams.get("thread_ts") === target.originThreadTs;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1391,6 +1417,7 @@ async function handleEventPost(input: {
             api: input.api,
             from: input.from,
             resolveSession: input.resolveSession,
+            codeChannels: true,
             credentials: config.credentials,
             envelope,
             handler: onEvent,
