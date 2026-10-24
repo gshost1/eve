@@ -324,6 +324,8 @@ export interface SlackInstrumentationMetadata extends Record<string, unknown> {
   readonly teamId: string | null;
   readonly threadTs: string | null;
   readonly triggeringUserId: string | null;
+  /** `true` in a code channel session; absent elsewhere. */
+  readonly codeChannel?: true;
 }
 
 /**
@@ -1360,40 +1362,57 @@ async function handleEventPost(input: {
   // Slack requires an agent to stop when a person stops a code channel session.
   // The stop names the channel, or a thread in it; both are the channel's one session.
   const stopped = envelope.event;
-  if (config.codeChannels === true && stopped.type === "agent_session_stopped") {
-    const stoppedChannelId = stopped.channel;
+  const stoppedChannelId = stopped.channel;
+  if (
+    config.codeChannels === true &&
+    stopped.type === "agent_session_stopped" &&
+    typeof stoppedChannelId === "string"
+  ) {
+    // A redelivered stop must not cancel a turn that started after the first one.
+    if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
+      return new Response("ok");
+    }
     const workspaceRequest = buildSlackWorkspaceHandle({
       api: input.api,
       botToken: config.credentials?.botToken,
       installationTeamId,
       teamId: typeof envelope.team_id === "string" ? envelope.team_id : undefined,
     }).request;
-    if (
-      typeof stoppedChannelId === "string" &&
-      (stopped.thread_ts === undefined ||
-        (await isSlackCodeChannel(stoppedChannelId, workspaceRequest)))
-    ) {
-      // A redelivered stop must not cancel a turn that started after the first one.
-      if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) {
-        return new Response("ok");
-      }
-      const source = input.from(slackCodeChannelContinuationToken(stoppedChannelId));
-      input.waitUntil(
-        (async () => {
-          const result = await source.cancel();
-          // A turn that died without ending leaves the status at `processing`, which
-          // never times out, so stop must still reset it.
-          if (result.status === "no_active_turn") {
-            await setSlackCodeChannelStatus(workspaceRequest, stoppedChannelId, "active");
-          }
-        })().catch((error: unknown) => {
-          logError(log, "agent_session_stopped cancel failed", error, {
-            channelId: stoppedChannelId,
+    const onEvent = config.onEvent;
+    input.waitUntil(
+      (async () => {
+        // A threaded stop needs the code channel lookup, which must not hold Slack's ack.
+        if (
+          stopped.thread_ts !== undefined &&
+          !(await isSlackCodeChannel(stoppedChannelId, workspaceRequest))
+        ) {
+          if (onEvent === undefined) return;
+          await dispatchSlackEvent({
+            api: input.api,
+            from: input.from,
+            resolveSession: input.resolveSession,
+            credentials: config.credentials,
+            envelope,
+            handler: onEvent,
+            installationTeamId,
           });
-        }),
-      );
-      return new Response("ok");
-    }
+          return;
+        }
+        const result = await input
+          .from(slackCodeChannelContinuationToken(stoppedChannelId))
+          .cancel();
+        // A turn that died without ending leaves the status at `processing`, which
+        // never times out, so stop must still reset it.
+        if (result.status === "no_active_turn") {
+          await setSlackCodeChannelStatus(workspaceRequest, stoppedChannelId, "active");
+        }
+      })().catch((error: unknown) => {
+        logError(log, "agent_session_stopped handling failed", error, {
+          channelId: stoppedChannelId,
+        });
+      }),
+    );
+    return new Response("ok");
   }
 
   // Handler precedence, in fall-through order:
