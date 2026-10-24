@@ -6,7 +6,15 @@ import type { DeliverHookPayload, DeliverPayload } from "#channel/types.js";
 import { AuthKey, TurnDeliveryIdsKey } from "#context/keys.js";
 import { setChannelContext } from "#execution/channel-context.js";
 import { coalesceDeliverPayloads } from "#execution/deliver-payloads.js";
-import { type DurableSessionState, readDurableSession } from "#execution/durable-session-store.js";
+import {
+  type DurableSessionState,
+  readDurableSession,
+  replaceDurableSessionSnapshot,
+} from "#execution/durable-session-store.js";
+import {
+  continueSessionUsage,
+  pushSessionUsageContinuation,
+} from "#execution/session-usage-continuation.js";
 import { isSteeringDelivery } from "#execution/session/input-queue.js";
 import { continueTurnAuth, resolveTurnPrincipal } from "#execution/session/principal.js";
 import {
@@ -86,6 +94,7 @@ async function routeProxiedDeliver(
   const parentPayloads = new Map<number, DeliverPayload>();
   const children = new Map<string, ChildBucket>();
   let parentAction: { readonly kind: "cancel-turn" } | undefined;
+  const continued: string[] = [];
   // A typed answer joins the open turn, so only the turn's own principal may
   // send one, as only they steer it. Anyone else's text waits for the turn to
   // end; their button answers still settle a request as its responder.
@@ -113,6 +122,7 @@ async function routeProxiedDeliver(
       state: durableSession.state,
     });
     parentAction ??= routed.parentAction;
+    continued.push(...routed.continued);
     if (routed.forSelf !== undefined) parentPayloads.set(sourcePayloadIndex, routed.forSelf);
 
     for (const [childIndex, forChild] of routed.forChildren.entries()) {
@@ -240,6 +250,16 @@ async function routeProxiedDeliver(
     ),
   );
   const retired = new Set(answered.flatMap((child) => child.resolutions.map((r) => r.requestId)));
+  // A Continue passing through raises this session's allowance, before the prompts it credits close.
+  const current = readDurableSession(published.sessionState);
+  const session = continueSessionUsage(current, continued);
+  if (session !== current && !published.cancelled) {
+    await pushSessionUsageContinuation(session);
+    published = {
+      ...published,
+      sessionState: replaceDurableSessionSnapshot({ session, state: published.sessionState }),
+    };
+  }
   const holds =
     children.size > 0 &&
     parentPayloads.size === 0 &&

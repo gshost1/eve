@@ -3,6 +3,9 @@ import { sleep } from "#compiled/@workflow/core/index.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import { cancelDescendantTurnsStep } from "#execution/cancel-descendant-turns-step.js";
+import { readDurableSession } from "#execution/durable-session-read.js";
+import { pushSessionUsageContinuationStep } from "#execution/session-usage-continuation.js";
+import { getSessionUsageWindowIndex } from "#harness/turn-tag-state.js";
 import {
   dispatchCoordinationStep,
   publishTaskStartedStep,
@@ -192,6 +195,7 @@ export class SessionExecution {
       const observation = this.input.inbox.handoverObservation;
       const handover =
         observation?.attemptKey === this.observedHandoverAttemptKey ? undefined : observation;
+      const windowBefore = getSessionUsageWindowIndex(readDurableSession(cursor.sessionState));
       const result = await cursor.advanceWithHistory((state) =>
         turnStep({
           ...state,
@@ -204,6 +208,10 @@ export class SessionExecution {
       );
       if (handover !== undefined) this.observedHandoverAttemptKey = handover.attemptKey;
       if (result.compacted === true) turn.compacted = true;
+      // The step applied a Continue on this session's own prompt; its runs raise their allowances too.
+      if (getSessionUsageWindowIndex(readDurableSession(cursor.sessionState)) !== windowBefore) {
+        await pushSessionUsageContinuationStep({ sessionState: cursor.sessionState });
+      }
       const pendingCallIds =
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;
       const turnCompleted = result.action === "park" && result.settled !== undefined;

@@ -10,6 +10,7 @@ import type {
 } from "#execution/session/input-queue.js";
 import type { SessionInboxReader } from "#execution/session-inbox/inbox.js";
 import { admitSessionInboxPayload } from "#execution/session/admission.js";
+import { applySessionUsageContinuation } from "#execution/session/usage-continuation.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
 
@@ -77,6 +78,10 @@ export async function nextTurnDelivery(input: {
     freshSequence =
       wasIdle && admitted.kind === "delivery" ? admitted.admission.sequence : undefined;
     if (admitted.kind === "workflow") return { kind: "workflow", message: admitted.message };
+    if (admitted.kind === "usage-continued") {
+      await applySessionUsageContinuation({ ...input, requestIds: admitted.requestIds });
+      continue;
+    }
     if (
       admitted.kind === "cancel" &&
       openInputs(storedProjection(cursor.sessionState.snapshot.session.state)).some(

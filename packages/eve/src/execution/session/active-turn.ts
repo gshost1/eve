@@ -2,6 +2,7 @@ import type { DeliverHookPayload, TurnCaller } from "#channel/types.js";
 import { mapHeldInputResponsesStep } from "#execution/proxied-deliver-step.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
 import { admitSessionInboxPayload } from "#execution/session/admission.js";
+import { applySessionUsageContinuation } from "#execution/session/usage-continuation.js";
 import {
   isSteeringDelivery,
   isSteeringMessage,
@@ -269,7 +270,11 @@ export class ActiveTurn {
     return payload.turnId === undefined || payload.turnId === this.expectedTurnId;
   }
 
-  /** Admits one payload; returns whether it was a delivery or sign-in callback. */
+  /**
+   * Admits one payload; returns whether it was a delivery or sign-in callback,
+   * or a usage continuation that answered the session's own prompt. A
+   * continuation applies now, so the runs this turn waits on hear of it.
+   */
   private async admit(value: SessionInboxPayload): Promise<boolean> {
     const admitted = await admitSessionInboxPayload(value, this.input);
     switch (admitted.kind) {
@@ -288,6 +293,15 @@ export class ActiveTurn {
       case "cancel":
         if (this.cancelsThisTurn(value)) this.abort();
         return false;
+      case "usage-continued": {
+        const approval = await applySessionUsageContinuation({
+          ...this.input,
+          requestIds: admitted.requestIds,
+        });
+        if (approval === undefined) return false;
+        this.admitted.add(approval.sequence);
+        return true;
+      }
       case "consumed":
         return value.kind === "authorization-callback";
     }
