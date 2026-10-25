@@ -1674,7 +1674,6 @@ describe("deliveries a child session reads", () => {
 
   it("replies to the latest forwarded caller when a cancel leaves its queued message unread", async () => {
     const name = "edge-cancel-unread-forward";
-    let reply: Promise<unknown> | undefined;
     const { events } = await withSession(
       name,
       {
@@ -1698,7 +1697,6 @@ describe("deliveries a child session reads", () => {
           (event) => event.type === "interaction.opened" && event.data.request.kind === "budget",
         );
         const receiver = await start(receiveDelegatedResultWorkflow, [`${name}:follow-up:reply`]);
-        reply = receiver.returnValue;
         await session.forward("follow-up", "Also check the changelog.");
         await session.until(
           "follow-up queued",
@@ -1711,6 +1709,10 @@ describe("deliveries a child session reads", () => {
           cancelled ||= event.type === "turn.settled";
           return cancelled && event.meta.endOfLine !== false;
         });
+        // Turn settlement precedes the reply; let it arrive before the helper cancels its owner.
+        await expect(receiver.returnValue).resolves.toMatchObject({
+          kind: "runtime-action-result",
+        });
       },
     );
 
@@ -1720,9 +1722,6 @@ describe("deliveries a child session reads", () => {
     expect(ofType(events, "delivery.settled").map((event) => event.data)).toContainEqual(
       expect.objectContaining({ deliveryId: followUp, outcome: "ignored" }),
     );
-    await expect(
-      Promise.race([reply, new Promise((resolve) => setTimeout(resolve, 5_000, "no reply"))]),
-    ).resolves.toMatchObject({ kind: "runtime-action-result" });
   });
 });
 

@@ -99,6 +99,43 @@ describe("ConversationTranscript", () => {
       transcript.project(conversationView(snapshot, tuiSessionData(parent.state)), OPTIONS);
       expect(transcript.tasks).toHaveLength(1);
       expect(transcript.tasks[0]?.step).toBe(linked ? "Linked work." : "Other work.");
+
+      const replacement = new Conversation();
+      testTurnFacts(0, "Replacement work.", ["replacement_delivery"]).forEach((event, index) =>
+        replacement.observe(stampTestEvent(event, index)),
+      );
+      const redirected: SessionEvent[] = [
+        {
+          type: "child.opened",
+          scope: { turnId: "turn_0", taskId: "task" },
+          data: {
+            name: "reviewer",
+            owner: { callId: "review" },
+            sessionId: "replacement",
+            stream: "",
+          },
+        },
+        {
+          type: "child.sent",
+          data: {
+            callId: "review",
+            childDeliveryId: "replacement_delivery",
+            sessionId: "replacement",
+          },
+        },
+      ];
+      redirected.forEach((event, index) =>
+        parent.observe(stampTestEvent(event, events.length + index)),
+      );
+      parent.observeAgent("replacement", {
+        status: "caught-up",
+        conversation: replacement.state,
+        caughtUp: true,
+        position: replacement.view.position,
+      });
+      const updated: SessionStoreSnapshot = { ...snapshot, ...parent.state };
+      transcript.project(conversationView(updated, tuiSessionData(parent.state)), OPTIONS);
+      expect(transcript.tasks[0]?.step).toBe("Replacement work.");
     },
   );
 

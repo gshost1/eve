@@ -233,18 +233,23 @@ class RunAgentSession implements AgentSession {
       const opened = await this.#opened;
       receipt = await sendAgentSessionMessageStep({ ...message, ...opened });
       if (receipt.sessionId !== opened.address.sessionId) {
-        const redirected = {
-          ...opened,
-          address: { ...opened.address, sessionId: receipt.sessionId },
-        };
-        this.#opened = Promise.resolve(redirected);
-        this.#sessions.push(redirected);
-        await this.#run.owner.send({
-          context: opened.context,
-          from,
-          kind: "agent-started",
-          session: redirected.address,
+        // Concurrent redirects must announce the replacement once, before either delivery link.
+        this.#opened = this.#opened.then(async (current) => {
+          if (current.address.sessionId === receipt.sessionId) return current;
+          const redirected = {
+            ...opened,
+            address: { ...opened.address, sessionId: receipt.sessionId },
+          };
+          this.#sessions.push(redirected);
+          await this.#run.owner.send({
+            context: opened.context,
+            from,
+            kind: "agent-started",
+            session: redirected.address,
+          });
+          return redirected;
         });
+        await this.#opened;
       }
     }
     if (receipt.deliveryId === undefined) return;

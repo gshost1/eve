@@ -11,10 +11,15 @@ export default defineEval({
     denied.messageIncludes("WORKFLOW-APPROVAL-DENIED-RESULT");
     denied.notEvent("interaction.opened");
     denied.notEvent("call.progress");
+    denied.notEvent("call.started");
+    denied.event("call.settled", {
+      count: 1,
+      data: { outcome: "rejected", cause: { policy: "approval" } },
+    });
     denied.calledTool("gated_deploy", {
       count: 1,
       output: /Tool execution was denied/u,
-      status: "failed",
+      status: "rejected",
     });
 
     for (const decision of ["approve", "deny"] as const) {

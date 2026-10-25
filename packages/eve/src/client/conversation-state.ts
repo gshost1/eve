@@ -70,7 +70,7 @@ export function agentToolSession(
   state: ConversationState,
   task: TaskRow,
 ): ConversationAgentSession | undefined {
-  return Object.values(state.agents).find(
+  return Object.values(state.agents).findLast(
     (agent) => agentToolTask(state, agent)?.taskId === task.taskId,
   );
 }

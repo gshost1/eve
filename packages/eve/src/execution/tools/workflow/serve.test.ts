@@ -296,6 +296,69 @@ it("serves every call to its task, one stretch of work at a time, until the sess
   expect(fourth?.aborted).toBe(true);
 });
 
+it("announces a replacement child once before linking concurrent accepted sends to it", async () => {
+  const announced = Promise.withResolvers<void>();
+  mocks.deliver.mockClear();
+  mocks.deliver.mockImplementation(async (_inbox, message) => {
+    if (message.kind === "agent-started" && message.session.sessionId === "replacement")
+      await announced.promise;
+  });
+  mocks.sendAgent.mockClear();
+  const accept = Promise.withResolvers<void>();
+  let delivery = 0;
+  mocks.openAgent.mockResolvedValue({
+    address: { kind: "local", name: "reviewer", nodeId: "reviewer", sessionId: "original" },
+    deliveryId: "opening",
+  });
+  mocks.sendAgent.mockImplementation(async () => {
+    const deliveryId = `followup-${delivery++}`;
+    await accept.promise;
+    return { deliveryId, sessionId: "replacement" };
+  });
+  mocks.serve.mockImplementation(
+    async (receive: WorkflowServeReceive<JsonValue>, ctx: WorkflowServeContext<JsonValue>) => {
+      await receive();
+      const agent = ctx.agent("reviewer");
+      await agent.send("Alice opens the review.");
+      await Promise.all([
+        agent.send("Alice adds a checklist."),
+        agent.send("Bob adds a rollout note."),
+      ]);
+      await agent.send("Alice confirms the inputs.");
+      ctx.reply("Review inputs accepted.");
+      return await receive();
+    },
+  );
+  const started = startServeBody(input);
+  await vi.waitFor(() => expect(mocks.sendAgent).toHaveBeenCalledTimes(2));
+  accept.resolve();
+  await vi.waitFor(() => expect(sent("agent-started")).toHaveLength(2));
+  expect(sent("agent-sent")).toHaveLength(1);
+  announced.resolve();
+  await vi.waitFor(() => expect(sent("reply")).toHaveLength(1));
+  started.control.apply({ kind: "end", reason: "The session ended." });
+  await started.outcome;
+
+  const relationships = mocks.deliver.mock.calls.flatMap(([, message]) =>
+    message.kind === "agent-started"
+      ? [`opened:${message.session.sessionId}`]
+      : message.kind === "agent-sent"
+        ? [`sent:${message.sessionId}:${message.deliveryId}`]
+        : [],
+  );
+  expect(relationships).toEqual([
+    "opened:original",
+    "sent:original:opening",
+    "opened:replacement",
+    "sent:replacement:followup-0",
+    "sent:replacement:followup-1",
+    "sent:replacement:followup-2",
+  ]);
+  expect(mocks.sendAgent.mock.calls[2]?.[0]).toMatchObject({
+    address: { sessionId: "replacement" },
+  });
+});
+
 it("withdraws a question once its call has a reply, without aborting the stretch", async () => {
   mocks.deliver.mockClear();
   mocks.deliver.mockResolvedValue(undefined);
