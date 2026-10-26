@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
 import { createTextWithFileContent } from "#client/file-parts.js";
+import { getDeliveryReceipt, type ClientSendReceipt } from "#client/delivery.js";
 import { followClientSession, type ClientSession } from "#client/session.js";
 import type {
   ClientSessionState,
@@ -40,6 +41,7 @@ import type {
   EveEvalDerivedFacts,
   EveEvalLiveTurn,
   EveEvalOutputAssertions,
+  EveEvalSendTiming,
   EveEvalSession,
   EveEvalSessionResult,
   EveEvalStreamEvent,
@@ -93,6 +95,9 @@ export class EvalSessionDriver implements EveEvalSession {
   readonly #events: SessionStreamEvent[] = [];
   /** Earlier events that name calls and tasks this driver's turns settle; never reported. */
   readonly #history: readonly SessionStreamEvent[];
+  /** Client arrival time of each entry of `#events`. */
+  readonly #receivedAt: number[] = [];
+  readonly #sends: EveEvalSendTiming[] = [];
   readonly #primary: boolean;
   readonly #onSessionStart: ((event: EvalSessionStartedEvent) => void) | undefined;
   readonly #traceContexts: TraceContext[] = [];
@@ -268,6 +273,7 @@ export class EvalSessionDriver implements EveEvalSession {
       answers === undefined
         ? await this.#session.send(message!, options)
         : await this.#session.respond(answers, options);
+    this.recordSend(answers === undefined ? "message" : "respond", getDeliveryReceipt(response));
     const deliveryId = response.deliveryId;
     // Delivery streams omit earlier facts, but the eval's cursor and view must not skip them.
     return this.consume(
@@ -280,6 +286,11 @@ export class EvalSessionDriver implements EveEvalSession {
       message,
       { deliveryId },
     );
+  }
+
+  /** @internal Keeps when a request to this session was sent and accepted. */
+  recordSend(kind: EveEvalSendTiming["kind"], receipt: ClientSendReceipt | undefined): void {
+    if (receipt !== undefined) this.#sends.push({ kind, ...receipt });
   }
 
   /** @internal */
@@ -297,8 +308,9 @@ export class EvalSessionDriver implements EveEvalSession {
       events,
       observe: (event) => this.#observeEvent(sessionId, event),
       initialView: this.view,
-      record: (observed, earlier) => {
+      record: (observed, earlier, receivedAt) => {
         this.#events.push(...earlier);
+        this.#receivedAt.push(...receivedAt.earlier);
         if (message !== undefined) {
           this.#lastInput =
             typeof message === "string"
@@ -308,7 +320,7 @@ export class EvalSessionDriver implements EveEvalSession {
                   .map((part) => part.text)
                   .join("\n");
         }
-        return this.#recordObservedTurn(sessionId, observed, ending.deliveryId);
+        return this.#recordObservedTurn(sessionId, observed, receivedAt.events, ending.deliveryId);
       },
       session: this,
       sessionId,
@@ -348,6 +360,7 @@ export class EvalSessionDriver implements EveEvalSession {
       sessionId,
       state: this.#session.state,
       traceContexts: [...this.#traceContexts],
+      clock: { receivedAt: [...this.#receivedAt], sends: [...this.#sends] },
     };
   }
 
@@ -377,11 +390,13 @@ export class EvalSessionDriver implements EveEvalSession {
     readonly error?: ErrorInfo;
     readonly events: readonly SessionStreamEvent[];
     readonly message: string | undefined;
+    readonly receivedAt: readonly number[];
     readonly sessionId: string;
     readonly sessionEnded: boolean;
     readonly status: RequestStatus | "working";
   }): EveEvalTurn {
     this.#events.push(...input.events);
+    this.#receivedAt.push(...input.receivedAt);
     const view = this.view;
     const interactions = openInteractions(view);
     this.#pendingInteractions = input.status === "awaiting-input" ? interactions : [];
@@ -414,6 +429,7 @@ export class EvalSessionDriver implements EveEvalSession {
   #recordObservedTurn(
     sessionId: string,
     events: readonly SessionStreamEvent[],
+    receivedAt: readonly number[],
     deliveryId?: string,
   ): EveEvalTurn {
     const summary = summarizeTurnEvents(events, deliveryId);
@@ -423,6 +439,7 @@ export class EvalSessionDriver implements EveEvalSession {
       error: summary.failure,
       events,
       message: summary.message,
+      receivedAt,
       sessionEnded: summary.sessionEnded,
       sessionId,
       status: summary.status,
@@ -446,6 +463,11 @@ export class EvalSessionDriver implements EveEvalSession {
   }
 }
 
+interface EvalReceivedAt {
+  readonly earlier: readonly number[];
+  readonly events: readonly number[];
+}
+
 interface LiveEventWaiter {
   /** What the waiter waits for, once `event` brings it. */
   readonly take: (event: SessionStreamEvent) => unknown;
@@ -460,6 +482,9 @@ class EvalLiveTurn implements EveEvalLiveTurn {
   readonly #initialView: SessionView;
   readonly #earlier: SessionStreamEvent[] = [];
   readonly #events: SessionStreamEvent[] = [];
+  /** Client arrival times, index-aligned with `#earlier` and `#events`. */
+  readonly #earlierReceivedAt: number[] = [];
+  readonly #receivedAt: number[] = [];
   readonly #waiters = new Set<LiveEventWaiter>();
   #waitError: Error | undefined;
 
@@ -474,6 +499,7 @@ class EvalLiveTurn implements EveEvalLiveTurn {
     readonly record: (
       events: readonly SessionStreamEvent[],
       earlier: readonly SessionStreamEvent[],
+      receivedAt: EvalReceivedAt,
     ) => EveEvalTurn;
     readonly session: EveEvalSession;
     readonly sessionId: string;
@@ -550,6 +576,7 @@ class EvalLiveTurn implements EveEvalLiveTurn {
     record: (
       events: readonly SessionStreamEvent[],
       earlier: readonly SessionStreamEvent[],
+      receivedAt: EvalReceivedAt,
     ) => EveEvalTurn,
     ending: {
       readonly deliveryId?: string;
@@ -570,10 +597,12 @@ class EvalLiveTurn implements EveEvalLiveTurn {
           ? source
           : deliveryEvents(source, deliveryId, undefined, (event) => {
               earlier.push(event);
+              this.#earlierReceivedAt.push(Date.now());
               observe(event);
             });
       for await (const event of events) {
         this.#events.push(event);
+        this.#receivedAt.push(Date.now());
         const endsTurn = turn.observe(event);
         if (endsWith?.(event) === true) matched = true;
         const endsSegment =
@@ -606,7 +635,10 @@ class EvalLiveTurn implements EveEvalLiveTurn {
         throw new Error(`Stream for session "${this.sessionId}" closed before a turn boundary.`);
       }
 
-      return record(this.#events, earlier);
+      return record(this.#events, earlier, {
+        earlier: this.#earlierReceivedAt,
+        events: this.#receivedAt,
+      });
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.#closeWaiters(normalized);

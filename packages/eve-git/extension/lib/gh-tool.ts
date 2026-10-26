@@ -12,7 +12,14 @@ import { githubShellInputSchema } from "./github-shell-schema.ts";
 export const GH_TOOL_DESCRIPTION =
   "Run one authenticated GitHub command in the sandbox. The full gh CLI surface is available. Commands run without an approval prompt; description records the GitHub-side result the command intends to produce. Declare exactly one repository in the configured GitHub organization: Connect mints the real token for only that repository, and the sandbox process receives only a placeholder GH_TOKEN that the firewall exchanges on matching GitHub requests. GitHub rejects access outside the token's server-side repository scope; commands that explicitly name another repository with -R, --repo, --repo=, or a repository argument to gh repo clone, view, or fork are denied before minting. Use simple argv quoting only, never environment assignments, pipes, redirects, substitutions, or other shell syntax. gh alias and extension commands may execute local code, but remain sandboxed. Use git here only for authenticated fetch, pull, push, or ls-remote against a strictly validated origin, and use gh-signed-commit only with --repo. Use ordinary bash for local git status, diff, add, commit, and rebase.";
 
-/** The Connect-brokered `gh` tool, bound to one extension's GitHub config. */
+const ghOutputSchema = z.object({
+  exitCode: z.number().int(),
+  stderr: z.string(),
+  stdout: z.string(),
+  truncated: z.boolean(),
+});
+
+/** The Connect-brokered `gh` tool, rebuilt by the dynamic resolver with its current config. */
 export function defineGhTool(
   github: () => GitHubConfig | undefined,
   description = GH_TOOL_DESCRIPTION,
@@ -21,12 +28,7 @@ export function defineGhTool(
     description,
     approval: ({ toolInput }) => githubShellApproval(toolInput as GitHubShellInput | undefined),
     inputSchema: githubShellInputSchema,
-    outputSchema: z.object({
-      exitCode: z.number().int(),
-      stderr: z.string(),
-      stdout: z.string(),
-      truncated: z.boolean(),
-    }),
+    outputSchema: ghOutputSchema,
     execute(input, ctx) {
       return executeGitHubShell(input, github(), {
         context: ctx,

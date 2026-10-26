@@ -93,6 +93,7 @@ export interface SessionExecutionInput {
  */
 export class SessionExecution {
   private readonly input: SessionExecutionInput;
+  private observedHandoverAttemptKey: string | undefined;
 
   constructor(input: SessionExecutionInput) {
     this.input = input;
@@ -193,6 +194,9 @@ export class SessionExecution {
       const { cursor } = this.input;
       const caller = bindCaller;
       bindCaller = undefined;
+      const observation = this.input.inbox.handoverObservation;
+      const handover =
+        observation?.attemptKey === this.observedHandoverAttemptKey ? undefined : observation;
       // A step that fails every attempt fails its turn, not the session; only a failed recovery
       // ends the session. What fails once a step has returned, such as adopting its state, is
       // not the step's failure, so it is not recovered.
@@ -200,6 +204,7 @@ export class SessionExecution {
         const run = (recover?: { readonly error: unknown }) =>
           turnStep({
             ...state,
+            handover,
             abortSignal: turn.signal,
             caller,
             input: nextStepInput,
@@ -210,6 +215,7 @@ export class SessionExecution {
           run({ error: normalizeSerializableError(exhaustedStepError(error)) }),
         );
       });
+      if (handover !== undefined) this.observedHandoverAttemptKey = handover.attemptKey;
       if (result.compacted === true) turn.compacted = true;
 
       // Deliveries the boundary admits next arrived while the step ran. A step

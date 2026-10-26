@@ -1,4 +1,5 @@
 import { bindTurnCallerContext } from "#subagents/parent-notification.js";
+import { traceSessionHandover } from "#execution/session/handover-tracing.js";
 import type { HandleEventFn } from "#harness/types.js";
 import { deriveSessionTitle } from "#execution/eve-workflow-attributes.js";
 import { setEveAttributes } from "#runtime/attributes/emit.js";
@@ -85,6 +86,7 @@ import {
   readDurableSession,
 } from "#execution/durable-session-store.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
+import { hasDelegatedSessionContext } from "#execution/delegated-session-context.js";
 import {
   resolveEffectiveAgentRuntime,
   resolveSessionUsageLimit,
@@ -111,6 +113,18 @@ interface PendingStepAttributes {
 /** Runs a bounded batch of harness model steps inside one durable `"use step"` boundary. */
 export async function turnStep(input: TurnStepInput): Promise<TurnStepResult> {
   "use step";
+  if (input.handover !== undefined) {
+    traceSessionHandover(
+      "inbox_unblocked",
+      input.sessionState.sessionId,
+      input.handover.attemptKey,
+      {
+        "eve.handoff.buffered_payload_count": input.handover.payloadCount,
+        "eve.handoff.applied_at_ms": input.handover.appliedAtMs,
+        "eve.handoff.applied_at_clock": "workflow",
+      },
+    );
+  }
   return await withSessionStateDelta(input, (state) =>
     runSessionStep({
       ...state,
@@ -613,6 +627,7 @@ async function runSessionStepBody(
         createRuntime: createWorkflowRuntime,
         handleEvent,
         signInCompletions,
+        typedAnswers: !hasDelegatedSessionContext(input.serializedContext),
         instrumentation,
         modelResolutionScope: {
           moduleMap: bundle.moduleMap,

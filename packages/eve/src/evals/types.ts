@@ -143,6 +143,36 @@ export interface EveEvalSessionResult {
   readonly state: ClientSessionState | undefined;
   /** Distinct trace contexts observed for this session, in stream order. */
   readonly traceContexts: readonly TraceContext[];
+  /**
+   * When the eval client sent to this session and received its events, for
+   * measuring eve's own overhead against the server's `meta.at` times.
+   */
+  readonly clock?: EveEvalSessionClock;
+}
+
+/** Client-clock timing for one captured session, in epoch milliseconds. */
+export interface EveEvalSessionClock {
+  /** When each entry of `events` arrived at the eval client, index-aligned. */
+  readonly receivedAt: readonly number[];
+  /** Every request the eval sent to this session, in send order. */
+  readonly sends: readonly EveEvalSendTiming[];
+}
+
+/**
+ * One request the eval sent: `prewarm` created the session without a message,
+ * `create` created it with its first message (whose turn is the session's
+ * first), `message` sent a message, and `respond` answered input requests.
+ */
+export interface EveEvalSendTiming {
+  readonly kind: "prewarm" | "create" | "message" | "respond";
+  /** The delivery the server accepted, which the events of its turn carry. */
+  readonly deliveryId?: string;
+  /** The first attempt was issued. */
+  readonly startedAt: number;
+  /** Retrying `409 session_not_ready` before the accepted attempt was issued. */
+  readonly notReadyMs: number;
+  /** The accepted response arrived. */
+  readonly acceptedAt: number;
 }
 
 /** Trace context attributed to one session involved in an eval. */
@@ -367,7 +397,7 @@ interface EveEvalSessionDriver {
    * this to a judge's `on` option to grade the complete conversation.
    */
   readonly transcript: string;
-  /** Input requests left pending by the last parked turn. */
+  /** Input requests still open when the last turn parked, including ones raised before a partial `respond()`. */
   readonly pendingInteractions: readonly Interaction[];
   /** Serializable cursor for resuming this session. */
   readonly state: ClientSessionState;

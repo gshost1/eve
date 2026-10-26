@@ -101,12 +101,13 @@ export async function admitHumanInput(
     await step.apply(requireSignIn(step.view(), { challenges: weighed.challenges, queued: input }));
     return { kind: "stop", result: await park(step) };
   }
-  const delivered = deliver(step.view(), input, options);
+  const typedAnswers = config.typedAnswers !== false;
+  const delivered = deliver(step.view(), input, { ...options, typedAnswers });
   if (delivered.takeQueued && step.view().turn.queued !== undefined) {
     await step.apply({ events: [], turn: { ...step.view().turn, queued: undefined } });
   }
   // A typed approval answers like a press, so the approval's response policy decides it.
-  const typed = resolveTypedApproval(step.view(), delivered.input);
+  const typed = typedAnswers ? resolveTypedApproval(step.view(), delivered.input) : delivered.input;
   const limit = openLimit(step.view());
   // A new message steers the held turn, unless it waits behind the budget prompt. A typed answer
   // is not a new message. A message queued behind a policy's answer or a responder's sign-in
@@ -119,7 +120,9 @@ export async function admitHumanInput(
 
   // A typed answer to the budget prompt is an answer like a press.
   const answered: ResolvedStepInput | undefined =
-    limit === undefined ? steered : resolveTextInput(step.view().projection.view, steered);
+    limit === undefined || !typedAnswers
+      ? steered
+      : resolveTextInput(step.view().projection.view, steered);
   // Who gave each answer decides whether it stands now, waits for a response policy, or is
   // refused.
   const check = checkResponders(step.view(), answered, Date.now());

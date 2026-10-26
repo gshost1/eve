@@ -223,3 +223,47 @@ describe("EveEvalLiveTurn", () => {
     await live.result();
   });
 });
+
+describe("eval session clock", () => {
+  it("records when each send was accepted and when each event arrived", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => {
+        now = 1_005;
+        return Response.json(
+          { ok: true, sessionId: "session_1", deliveryId: "d_1" },
+          { status: 202 },
+        );
+      })
+      .mockImplementationOnce(async () => {
+        now = 1_010;
+        return new Response(
+          testTurnFacts(0, "Alice's order shipped.", ["d_1"]).map(encodeTestLine).join(""),
+          { headers: { [EVE_STREAM_VERSION_HEADER]: EVE_MESSAGE_STREAM_VERSION } },
+        );
+      });
+    const manager = new EvalSessionManager({ client: new Client({ baseUrl: "https://eve.test" }) });
+    const session = manager.attach("session_1");
+
+    await session.send("Find Alice's order status.");
+
+    const { clock, events } = session.snapshot();
+    expect(clock?.sends).toEqual([
+      {
+        kind: "message",
+        deliveryId: "d_1",
+        startedAt: 1_000,
+        notReadyMs: 0,
+        acceptedAt: 1_005,
+      },
+    ]);
+    const [sent] = clock!.sends;
+    expect(sent!.acceptedAt).toBeGreaterThan(sent!.startedAt);
+    // One arrival time per snapshot event, in snapshot order, all after the send was accepted.
+    expect(events.length).toBeGreaterThan(0);
+    expect(clock?.receivedAt).toHaveLength(events.length);
+    expect(clock!.receivedAt[0]).toBeGreaterThan(sent!.acceptedAt);
+    expect(clock!.receivedAt).toEqual([...clock!.receivedAt].sort((a, b) => a - b));
+  });
+});

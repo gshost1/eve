@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 
-import { resolveTextInput } from "#harness/hitl/delivery.js";
+import { deliver, resolveTextInput } from "#harness/hitl/delivery.js";
+import type { SessionView } from "#harness/session-machine/view.js";
+import { initialSessionProjection } from "#protocol/session-projection.js";
 import { emptySessionView, foldLines } from "#protocol/session-projection/fold.js";
 
 it.each([
@@ -100,3 +102,55 @@ it("drops the history a typed answer brought, from its input and its deliveries"
     { deliveryId: "incoming", parts: [{ kind: "text", text: "approve" }] },
   ]);
 });
+
+it.each([
+  { typedAnswers: undefined, answers: [{ interactionId: "budget", optionId: "approve" }] },
+  { typedAnswers: false, answers: undefined },
+])(
+  "a message behind a queued one answers the budget prompt only with typed answers $typedAnswers",
+  ({ typedAnswers, answers }) => {
+    const tables = emptySessionView();
+    foldLines(
+      tables,
+      [
+        {
+          at: "2026-10-15T00:00:00Z",
+          facts: [
+            {
+              type: "interaction.opened",
+              data: {
+                interactionId: "budget",
+                subject: { turnId: "turn_0" },
+                request: {
+                  kind: "budget",
+                  prompt: "Keep going?",
+                  options: [{ id: "approve", label: "approve" }],
+                },
+              },
+            },
+          ],
+        },
+      ],
+      0,
+    );
+    const view: SessionView = {
+      projection: { ...initialSessionProjection(), view: tables },
+      relayedRequestIds: new Set<string>(),
+      responders: {},
+      signIns: [],
+      turn: {
+        queued: { message: "Bob asked for the summary too.", deliveries: [] },
+        suspended: [],
+        remembered: {},
+      },
+    };
+    const result = deliver(
+      view,
+      { message: "approve", deliveries: [{ deliveryId: "incoming", parts: [] }] },
+      { takeQueued: true, typedAnswers },
+    );
+    expect(
+      result.input?.answers?.map(({ interactionId, optionId }) => ({ interactionId, optionId })),
+    ).toEqual(answers);
+  },
+);

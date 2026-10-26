@@ -68,6 +68,7 @@ interface CreateExecutionNodeStepInput {
   readonly createRuntime: CreateRuntime;
   readonly handleEvent?: HandleEventFn;
   readonly signInCompletions?: ToolLoopHarnessConfig["signInCompletions"];
+  readonly typedAnswers?: ToolLoopHarnessConfig["typedAnswers"];
   readonly instrumentation: ExecutionInstrumentation | undefined;
   readonly titleAttributeWrite?: ToolLoopHarnessConfig["titleAttributeWrite"];
   readonly modelResolutionScope: RuntimeModelResolutionScope;
@@ -94,6 +95,7 @@ export function createExecutionNodeStep(input: CreateExecutionNodeStepInput): St
     handleEvent: input.handleEvent,
     instrumentation: sessionInstrumentation,
     signInCompletions: input.signInCompletions,
+    typedAnswers: input.typedAnswers,
     resolveModel,
     runtimeIdentity: buildRuntimeIdentity(input.node),
     sessionUsageLimit: input.sessionUsageLimit,

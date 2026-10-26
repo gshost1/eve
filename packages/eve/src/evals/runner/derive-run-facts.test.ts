@@ -196,7 +196,13 @@ it("reads what a turn did: its calls by kind, the request it waits on, and its m
         output: { temperature: 4 },
         status: "completed",
       },
-      { callId: "call_research", name: "research", status: "pending" },
+      // An agent call reports the input the model sent its tool.
+      {
+        callId: "call_research",
+        input: { id: "call_research" },
+        name: "research",
+        status: "pending",
+      },
       { callId: "call_deploy", name: "deploy", status: "pending" },
     ],
     usage: { inputTokens: 100, outputTokens: 10 },
@@ -215,5 +221,126 @@ it("counts a call an earlier turn asked for when this segment settles it, and th
     parked: false,
     toolCalls: [{ callId: "call_deploy", output: "deployed", status: "completed" }],
     usage: { inputTokens: 200, outputTokens: 20 },
+  });
+});
+
+it("does not mark a later completed turn parked on an earlier interaction in a sparse history", () => {
+  const events = stream([
+    ...firstTurn,
+    { type: "turn.settled", scope: turn0, data: { turnId: "turn_0", outcome: "cancelled" } },
+    {
+      type: "turn.started",
+      scope: turn1,
+      data: { turnId: "turn_1", follows: "turn_0", cause: { deliveryId: "d_1" } },
+    },
+    { type: "turn.settled", scope: turn1, data: { turnId: "turn_1", outcome: "completed" } },
+  ]);
+  expect(deriveRunFacts(events).parked).toBe(false);
+});
+
+it("marks a later parent turn parked on a relayed child interaction", () => {
+  const events = stream([
+    ...firstTurn,
+    { type: "turn.settled", scope: turn0, data: { turnId: "turn_0", outcome: "cancelled" } },
+    {
+      type: "turn.started",
+      scope: turn1,
+      data: { turnId: "turn_1", follows: "turn_0", cause: { deliveryId: "d_1" } },
+    },
+    {
+      type: "interaction.opened",
+      scope: turn1,
+      data: {
+        interactionId: "relayed",
+        subject: { callId: "call_research" },
+        origin: { sessionId: "child_0", interactionId: "child_approval" },
+        request: { kind: "approval", prompt: "Deploy the child's change?" },
+      },
+    },
+    {
+      type: "turn.paused",
+      scope: turn1,
+      data: { turnId: "turn_1", awaiting: [{ interactionId: "relayed" }] },
+    },
+  ]);
+  expect(deriveRunFacts(events).parked).toBe(true);
+});
+
+it("counts a responder's sign-in as an interaction requiring input", () => {
+  const events = stream([
+    ...firstTurn,
+    {
+      type: "interaction.opened",
+      scope: turn0,
+      data: {
+        interactionId: "sign_in",
+        subject: { responseId: "r_0" },
+        request: { kind: "sign-in", prompt: "Sign in to approve.", signIn: { name: "deploy" } },
+      },
+    },
+    {
+      type: "turn.paused",
+      scope: turn0,
+      data: { turnId: "turn_0", awaiting: [{ interactionId: "sign_in" }] },
+    },
+  ]);
+  expect(deriveRunFacts(events).parked).toBe(true);
+});
+
+// https://github.com/vercel/eve/issues/5157
+it("reads a partial answer's segment as parked on the request it left open", () => {
+  const approval = (interactionId: string, callId: string): SessionEvent =>
+    ({
+      data: {
+        interactionId,
+        request: {
+          kind: "approval",
+          options: [{ id: "approve", label: "Approve" }],
+          prompt: `Deploy ${callId}?`,
+        },
+        subject: { callId },
+      },
+      scope: turn0,
+      type: "interaction.opened",
+    }) as SessionEvent;
+  const asked: SessionEvent[] = [
+    {
+      data: { cause: { deliveryId: "d_0" }, follows: null, turnId: "turn_0" },
+      scope: turn0,
+      type: "turn.started",
+    },
+    call("call_api", "tool", "deploy_service"),
+    call("call_web", "tool", "deploy_service"),
+    approval("i_api", "call_api"),
+    approval("i_web", "call_web"),
+    {
+      data: {
+        awaiting: [{ interactionId: "i_api" }, { interactionId: "i_web" }],
+        turnId: "turn_0",
+      },
+      scope: turn0,
+      type: "turn.paused",
+    },
+  ] as SessionEvent[];
+  const answered: SessionEvent[] = [
+    {
+      data: { cause: { responseId: "r_api" }, interactionId: "i_api", outcome: "accepted" },
+      scope: turn0,
+      type: "interaction.settled",
+    },
+    done("call_api", "deployed"),
+    {
+      data: { awaiting: [{ interactionId: "i_web" }], turnId: "turn_0" },
+      scope: turn0,
+      type: "turn.paused",
+    },
+  ] as SessionEvent[];
+  const all = stream([...asked, ...answered]);
+  const segment = all.slice(asked.length);
+
+  expect(deriveRunFacts(segment, { usageEvents: all })).toMatchObject({
+    interactions: [],
+    parked: true,
+    toolCalls: [{ callId: "call_api", output: "deployed", status: "completed" }],
   });
 });

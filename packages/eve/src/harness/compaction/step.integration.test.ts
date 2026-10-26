@@ -1,15 +1,20 @@
+import { jsonSchema } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ContextContainer, contextStorage } from "#context/container.js";
+import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { eventsOf } from "#harness/publication.js";
 import { sessionUsage, takeSessionUsageDelta } from "#harness/session-usage.js";
-import type { HarnessSession } from "#harness/types.js";
+import type { HarnessSession, HarnessToolMap } from "#harness/types.js";
+import { foldingHandler } from "#internal/testing/session-machine.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import { createStreamChecker } from "#protocol/session-events/checker.js";
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV3["doStream"]>>;
 type StreamPart = StreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
+type Prompt = Parameters<MockLanguageModelV3["doStream"]>[0]["prompt"];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -41,6 +46,47 @@ const summaryStream = (): StreamResult =>
       },
     },
   ]);
+
+const finish = (unified: "stop" | "tool-calls"): StreamPart => ({
+  finishReason: { raw: undefined, unified },
+  type: "finish",
+  usage: {
+    inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 50, total: 50 },
+    outputTokens: { reasoning: 0, text: 8, total: 8 },
+  },
+});
+const answer = (): StreamResult =>
+  streamOf([
+    { type: "stream-start", warnings: [] },
+    { id: "reply", type: "text-start" },
+    { delta: "The second claim cites two cases.", id: "reply", type: "text-delta" },
+    { id: "reply", type: "text-end" },
+    finish("stop"),
+  ]);
+const lookup = (preamble: string): StreamResult =>
+  streamOf([
+    { type: "stream-start", warnings: [] },
+    { id: "preamble", type: "text-start" },
+    { delta: preamble, id: "preamble", type: "text-delta" },
+    { id: "preamble", type: "text-end" },
+    { input: "{}", toolCallId: "lookup-1", toolName: "lookup", type: "tool-call" },
+    finish("tool-calls"),
+  ]);
+const lookupTool: HarnessToolDefinition = {
+  description: "Looks up the sources.",
+  execute: async () => "Two cases.",
+  inputSchema: jsonSchema({ type: "object" }),
+  name: "lookup",
+};
+
+/** The user-role text of one model request, in order. */
+function userTexts(prompt: Prompt): string[] {
+  return prompt.flatMap((message) =>
+    message.role === "user"
+      ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      : [],
+  );
+}
 
 /** Manually compacts a short conversation with `model`, as `session.compact()` does. */
 async function compactWith(
@@ -243,5 +289,51 @@ describe("compaction summary call", () => {
       { data: { owner: { runId: "run_0" } } },
     ]);
     expect(issues).toEqual([]);
+  });
+});
+
+describe("announcements after a compaction during a turn", () => {
+  it("announces the catalog again before the turn's question, not after it", async () => {
+    const question = "Which sources back the second claim?";
+    const requests: string[][] = [];
+    const model = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        const system = prompt[0]?.role === "system" ? prompt[0].content : "";
+        if (!system.includes("You help Alice.")) return summaryStream();
+        requests.push(userTexts(prompt));
+        // A long first reply pushes the second step over the threshold, so compaction runs
+        // between the turn's steps and folds the first announcement into the summary.
+        return requests.length === 1
+          ? lookup(`Let me check. ${"lorem ipsum ".repeat(1_500)}`)
+          : answer();
+      },
+    });
+    const session: HarnessSession = {
+      agent: { modelReference: { id: "step-model" }, system: "You help Alice.", tools: [] },
+      compaction: { recentWindowSize: 1, threshold: 2_000 },
+      continuationToken: "http:announcement-compaction-session",
+      history: [],
+      sessionId: "announcement-compaction-session",
+    };
+    const tools: HarnessToolMap = new Map([
+      ["lookup", lookupTool],
+      // A deferred tool gives the session a catalog to announce.
+      ["refund_invoice", { ...lookupTool, deferred: true, name: "refund_invoice" }],
+    ]);
+
+    await contextStorage.run(new ContextContainer(), async () => {
+      let stepped = await createToolLoopHarness({
+        handleEvent: foldingHandler(),
+        resolveModel: async () => model,
+        tools,
+      })(session, { message: question });
+      while (typeof stepped.next === "function") stepped = await stepped.next(stepped.session);
+    });
+
+    const catalog = expect.stringContaining("eve__search");
+    expect(requests).toEqual([
+      [catalog, question],
+      ["Summary of our conversation so far:", catalog, question],
+    ]);
   });
 });

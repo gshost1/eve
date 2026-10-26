@@ -35,6 +35,8 @@ export type {
   EveEvalJudgeConfig,
   EveEvalRunSummary,
   EveEvalSession,
+  EveEvalSendTiming,
+  EveEvalSessionClock,
   EveEvalSessionResult,
   EveEvalScheduleDispatchResult,
   EveEvalSkillLoad,

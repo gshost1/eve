@@ -10,7 +10,7 @@ import {
 import { ClientAgentSession } from "#client/agent-session.js";
 import { ClientError, createClientError } from "#client/client-error.js";
 import { messageForRequest } from "#client/file-parts.js";
-import { StreamDelivery, type Delivery } from "#client/delivery.js";
+import { StreamDelivery, type ClientSendReceipt, type Delivery } from "#client/delivery.js";
 import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 import { followStreamIterable, sleep, type FollowedEvent } from "#client/open-stream.js";
 import { prewarmClientSession, sendClientControl } from "#client/session-controls.js";
@@ -68,12 +68,15 @@ export class ClientSession {
     context: ClientSessionContext,
     input: SendTurnInput<TOutput> & CreateSessionOptions,
   ): Promise<{ readonly delivery: Delivery<TOutput>; readonly session: ClientSession }> {
+    const startedAt = Date.now();
     const response = await postTurn(context, EVE_SESSION_ROUTE_PATH, input, true, input.stubs);
+    const acceptedAt = Date.now();
     const { sessionId, deliveryId } = await readAcceptedMessage(response);
     const session = new ClientSession(context, { sessionId, streamIndex: 0 });
+    const receipt = { deliveryId, startedAt, notReadyMs: 0, acceptedAt };
 
     return {
-      delivery: session.#messageResponse<TOutput>(response, input, 0, deliveryId),
+      delivery: session.#messageResponse<TOutput>(response, input, 0, deliveryId, receipt),
       session,
     };
   }
@@ -142,9 +145,12 @@ export class ClientSession {
   ): Promise<Delivery<TOutput>> {
     const initialStreamIndex = this.#state.streamIndex;
     const path = createEveSessionRoutePath(this.#state.sessionId);
-    const response = retrySessionNotReady
-      ? await postSessionSend(this.#context, path, input)
-      : await postTurn(this.#context, path, input, false);
+    const { response, timing } = await postSessionSend(
+      this.#context,
+      path,
+      input,
+      retrySessionNotReady,
+    );
     const { sessionId: responseSessionId, deliveryId } = await readAcceptedMessage(
       response,
       this.#state.sessionId,
@@ -157,7 +163,10 @@ export class ClientSession {
         "Message route did not return a delivery id. Update the server before sending with this client.",
       );
     }
-    return this.#messageResponse<TOutput>(response, input, initialStreamIndex, deliveryId);
+    return this.#messageResponse<TOutput>(response, input, initialStreamIndex, deliveryId, {
+      ...timing,
+      deliveryId,
+    });
   }
 
   /** Requests preparation of an existing idle session; never starts a model turn. */
@@ -245,7 +254,8 @@ export class ClientSession {
     response: Response,
     input: SendTurnPayload,
     initialStreamIndex: number,
-    deliveryId?: string,
+    deliveryId: string | undefined,
+    receipt: ClientSendReceipt,
   ): Delivery<TOutput> {
     response.body?.cancel().catch(() => {});
     if (deliveryId === undefined) throw new Error("Message route did not return a delivery id.");
@@ -253,6 +263,7 @@ export class ClientSession {
       createStream: (read) =>
         this.#createEventStream(initialStreamIndex, { ...input, signal: read?.signal }, deliveryId),
       deliveryId,
+      receipt,
       sessionId: this.#state.sessionId,
     });
   }
@@ -337,14 +348,22 @@ async function postSessionSend(
   context: ClientSessionContext,
   path: string,
   input: SendTurnPayload,
-): Promise<Response> {
-  const readyDeadline = Date.now() + SESSION_SEND_READY_TIMEOUT_MS;
+  retrySessionNotReady: boolean,
+): Promise<{
+  readonly response: Response;
+  readonly timing: Omit<ClientSendReceipt, "deliveryId">;
+}> {
+  const startedAt = Date.now();
+  const readyDeadline = startedAt + SESSION_SEND_READY_TIMEOUT_MS;
   let retryDelayMs = SESSION_SEND_RETRY_BASE_DELAY_MS;
   for (;;) {
+    const attemptAt = Date.now();
     try {
-      return await postTurn(context, path, input, false);
+      const response = await postTurn(context, path, input, false);
+      const timing = { startedAt, notReadyMs: attemptAt - startedAt, acceptedAt: Date.now() };
+      return { response, timing };
     } catch (error) {
-      if (!isSessionNotReady(error)) throw error;
+      if (!retrySessionNotReady || !isSessionNotReady(error)) throw error;
       const remainingMs = readyDeadline - Date.now();
       if (remainingMs <= 0) throw error;
       await sleep(Math.min(retryDelayMs, remainingMs), input.signal);

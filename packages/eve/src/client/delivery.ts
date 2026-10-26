@@ -4,11 +4,28 @@ import { throwIfAborted } from "#client/abort-signal.js";
 import type { Delivery, DeliveryReadOptions, DeliveryResult } from "#shared/delivery.js";
 export type { Delivery } from "#shared/delivery.js";
 
+/**
+ * @internal When the client sent an accepted message or answer, in epoch
+ * milliseconds on the client's clock.
+ */
+export interface ClientSendReceipt {
+  readonly deliveryId?: string;
+  /** The first attempt was issued. */
+  readonly startedAt: number;
+  /** Retrying `409 session_not_ready` before the accepted attempt was issued. */
+  readonly notReadyMs: number;
+  /** The accepted response arrived. */
+  readonly acceptedAt: number;
+}
+
 interface DeliveryInput {
   readonly createStream: (options?: DeliveryReadOptions) => AsyncIterable<SessionStreamEvent>;
   readonly deliveryId: string;
+  readonly receipt?: ClientSendReceipt;
   readonly sessionId: string;
 }
+
+const sendReceipts = new WeakMap<Delivery, ClientSendReceipt>();
 
 /** An accepted command: its receipt and independent reads through its own settlement. */
 export class StreamDelivery<TOutput = unknown> implements Delivery<TOutput> {
@@ -21,6 +38,7 @@ export class StreamDelivery<TOutput = unknown> implements Delivery<TOutput> {
   constructor(input: DeliveryInput) {
     this.sessionId = input.sessionId;
     this.deliveryId = input.deliveryId;
+    if (input.receipt !== undefined) sendReceipts.set(this, input.receipt);
     this.#createStream = input.createStream;
   }
 
@@ -64,4 +82,9 @@ export class StreamDelivery<TOutput = unknown> implements Delivery<TOutput> {
     this.#result = result;
     return result;
   }
+}
+
+/** @internal Returns when the client sent the delivery's request, if it sent it. */
+export function getDeliveryReceipt(delivery: Delivery): ClientSendReceipt | undefined {
+  return sendReceipts.get(delivery);
 }

@@ -331,9 +331,11 @@ export async function createSessionStreamResponse(
   const includeTailIndex = !follow || parseIncludeTailIndex(request);
 
   try {
-    // An unknown or unreachable session would otherwise answer 200 and then fail mid-body, so
-    // the tail must resolve before any bytes are committed. A position cursor opens the stream
-    // alongside it to save a round trip; a tail-relative cursor needs the tail to become one.
+    // An unknown or unreachable session would otherwise answer 200 and then fail mid-body, so it
+    // must fail before any bytes are committed. A following read checks the session as it opens
+    // and a historical read always reports the tail, so only a response that reports the tail, or
+    // a tail-relative cursor that needs it to become a position, pays for the lookup. A position
+    // cursor opens the stream alongside it to save a round trip.
     const early =
       startIndex === undefined || startIndex >= 0
         ? internalSession(session).getLineStream({ follow, startIndex: startIndex ?? 0 })
@@ -341,17 +343,22 @@ export async function createSessionStreamResponse(
     // Handled below; this keeps an early rejection from being reported as unhandled.
     early?.catch(() => {});
     const earlierEve = startedOnEarlierEve(session);
-    let tailIndex: number;
-    try {
-      tailIndex = await internalSession(session).getStreamTailIndex();
-    } catch (error) {
-      void early?.then((lines) => lines.cancel()).catch(() => {});
-      throw error;
+    let tailIndex: number | undefined;
+    if (includeTailIndex || early === undefined) {
+      try {
+        tailIndex = await internalSession(session).getStreamTailIndex();
+      } catch (error) {
+        void early?.then((lines) => lines.cancel()).catch(() => {});
+        throw error;
+      }
     }
     const from =
-      early === undefined ? Math.max(0, tailIndex + 1 + (startIndex ?? 0)) : (startIndex ?? 0);
+      early === undefined
+        ? Math.max(0, (tailIndex ?? -1) + 1 + (startIndex ?? 0))
+        : (startIndex ?? 0);
     let lines: ReadableStream<unknown>;
-    let lineLimit = includeTailIndex ? Math.max(0, tailIndex - from + 1) : undefined;
+    let lineLimit =
+      includeTailIndex && tailIndex !== undefined ? Math.max(0, tailIndex - from + 1) : undefined;
     if (await earlierEve) {
       // An eve before v27 recorded it: read every v26 line, each in light of those before it.
       void early?.then((opened) => opened.cancel()).catch(() => {});
@@ -374,7 +381,7 @@ export async function createSessionStreamResponse(
       [EVE_STREAM_FORMAT_HEADER]: EVE_MESSAGE_STREAM_FORMAT,
       [EVE_STREAM_VERSION_HEADER]: EVE_MESSAGE_STREAM_VERSION,
     });
-    if (includeTailIndex) {
+    if (includeTailIndex && tailIndex !== undefined) {
       headers.set(EVE_STREAM_TAIL_INDEX_HEADER, String(tailIndex));
     }
     return new Response(serializeLines(lines, request.signal, lineLimit), { headers });

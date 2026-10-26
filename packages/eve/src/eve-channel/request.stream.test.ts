@@ -17,6 +17,7 @@ const line = (deliveryId: string) => ({
 function sessionOf(lines: readonly unknown[], options: { readonly open?: boolean } = {}) {
   const starts: number[] = [];
   const follows: (boolean | undefined)[] = [];
+  let tailLookups = 0;
   const session = {
     id: "session_1",
     async getLineStream({
@@ -36,6 +37,7 @@ function sessionOf(lines: readonly unknown[], options: { readonly open?: boolean
       });
     },
     async getStreamTailIndex() {
+      tailLookups += 1;
       return lines.length - 1;
     },
   };
@@ -43,6 +45,7 @@ function sessionOf(lines: readonly unknown[], options: { readonly open?: boolean
     follows,
     session: session as Session,
     starts,
+    tailLookups: () => tailLookups,
   };
 }
 
@@ -166,6 +169,23 @@ describe("createSessionStreamResponse", () => {
       { $eve: "heartbeat" },
       line("a"),
       line("b"),
+      { $eve: "stream.ended" },
+    ]);
+  });
+
+  // On the local world the tail lookup opens every chunk file, so a follow
+  // read that does not report the tail must not pay for it.
+  it("follows a session without resolving a tail it does not report", async () => {
+    const { session, tailLookups } = sessionOf([line("a")]);
+    const response = await createSessionStreamResponse(
+      new Request("https://eve.test/eve/v1/session/session_1/stream"),
+      session,
+    );
+    expect(response.headers.get(EVE_STREAM_TAIL_INDEX_HEADER)).toBeNull();
+    expect(tailLookups()).toBe(0);
+    expect(await records(response)).toEqual([
+      { $eve: "heartbeat" },
+      line("a"),
       { $eve: "stream.ended" },
     ]);
   });

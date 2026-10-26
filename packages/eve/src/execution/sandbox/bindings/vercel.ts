@@ -587,6 +587,7 @@ function createVercelConnection(
         signal: options.signal,
       });
       return adaptMultiplexedCommandToSandboxProcess({
+        abortSignal: options.signal,
         command,
         getOutput: (log) => log.stream,
       });

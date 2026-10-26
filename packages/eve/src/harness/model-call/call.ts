@@ -52,7 +52,7 @@ import { estimateTokens } from "#harness/token-estimate.js";
 import { throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { requireSessionModelReference, type StepResult } from "#harness/types.js";
 import { createLogger, logError } from "#internal/logging.js";
-import { maybeCompact } from "#harness/compaction/step.js";
+import { compactedTurnInput, maybeCompact } from "#harness/compaction/step.js";
 import { nextChangeId, nextRunId } from "#protocol/session-projection.js";
 import { buildGatewayAttributionHeaders, withGatewayTraceContext } from "./model.js";
 import {
@@ -124,6 +124,8 @@ export class ModelCaller {
   private readonly attributionHeaders: Record<string, string> | undefined;
   /** The prompt as the model reads it, projected for its history view. */
   private projectedMessages: HarnessModelMessage[];
+  /** The step's announcements go before the first of these the prompt has. */
+  private turnMessages: readonly HarnessModelMessage[];
   /** The latest attempt's request; its history is what the step commits. */
   request: RequestMessages;
   /** The messages the latest attempt sent, after attachments were hydrated. */
@@ -157,6 +159,7 @@ export class ModelCaller {
       step.config.runtimeIdentity,
     );
     this.projectedMessages = input.projectedMessages;
+    this.turnMessages = input.turnMessages;
     this.request = this.buildRequest();
   }
 
@@ -251,7 +254,7 @@ export class ModelCaller {
       messages: this.prompt.messages,
       pendingApprovalsNote: this.input.pendingApprovalsNote,
       projectedMessages: this.projectedMessages,
-      turnMessages: this.input.turnMessages,
+      turnMessages: this.turnMessages,
     });
   }
 
@@ -323,6 +326,13 @@ export class ModelCaller {
     }
     if (!compaction.compacted) return tools;
     compactPrompt(step, prompt, compaction.messages);
+    // Compaction cleared what earlier requests announced, so this request announces it again. A
+    // step that continues from tool results has no input of its own, so the announcement goes
+    // before the turn's input, not after those results where the model reads it as the newest
+    // message.
+    const turnInput = compactedTurnInput(prompt.messages);
+    this.turnMessages =
+      turnInput === undefined ? this.input.turnMessages : [...this.input.turnMessages, turnInput];
     step.session = {
       ...step.session,
       compaction: withoutPromptMeasurement(step.session.compaction),

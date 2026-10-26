@@ -27,7 +27,7 @@ import type { SessionView } from "#harness/session-machine/view.js";
 export function deliver(
   view: SessionView,
   input: HarnessStepInput | undefined,
-  options: { readonly takeQueued: boolean },
+  options: { readonly takeQueued: boolean; readonly typedAnswers?: boolean },
 ): {
   readonly input?: HarnessStepInput;
   readonly displayMessage?: MessageContent;
@@ -37,7 +37,7 @@ export function deliver(
   const limit = openRequests(view.projection.view).find((row) => row.request.kind === "budget");
   // Match the new typed answer before queued messages join it.
   const incoming =
-    queued !== undefined && limit !== undefined
+    queued !== undefined && limit !== undefined && options.typedAnswers !== false
       ? resolveTextInput(view.projection.view, input)
       : input;
   const merged =

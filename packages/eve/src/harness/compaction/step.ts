@@ -10,7 +10,11 @@ import {
   type StepResult,
   type ToolLoopHarnessConfig,
 } from "#harness/types.js";
-import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
+import {
+  type HarnessModelMessage,
+  isUserModelMessage,
+  validateHarnessModelMessages,
+} from "#harness/messages.js";
 import type { Publish } from "#harness/session-machine/commit.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { Step } from "#harness/step/context.js";
@@ -426,6 +430,17 @@ async function compactOnce(input: {
   }
 
   return { compacted: true, messages, session: replaceSessionHistory(session, messages) };
+}
+
+/**
+ * Where a compaction during a turn leaves the turn's input: its latest user message, or that
+ * message's replay. What the framework adds for the turn goes before it, as on the turn's first
+ * step.
+ */
+export function compactedTurnInput<Message extends ModelMessage>(
+  messages: readonly Message[],
+): Message | undefined {
+  return messages.findLast((message) => isUserModelMessage(message) && message.kind === "user");
 }
 
 type CompactionSummaryPrompt = Parameters<CompactionSummarizer>[0];
