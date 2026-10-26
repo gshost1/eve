@@ -4,6 +4,11 @@ import type { ValidQueueName } from "#compiled/@workflow/world/index.js";
 import type { LocalWorld } from "#compiled/@workflow/world-local/index.js";
 import { timingSafeEqualStrings } from "#internal/nitro/dev-client-address.js";
 import {
+  enqueueRecoveredRun,
+  RECOVERED_OWNER_MESSAGE_HEADER,
+  resolveTrustedDeliveryMessageId,
+} from "#internal/workflow/local-world-owner-recovery.js";
+import {
   workflowQueuePrefix,
   WORKFLOW_QUEUE_NAMESPACE_ENV,
 } from "#internal/workflow/queue-namespace.js";
@@ -43,20 +48,31 @@ export function authenticateLocalWorkflowDeliveries(
       if (proof === null || !timingSafeEqualStrings(proof, secret)) {
         return Response.json({ error: "Untrusted workflow delivery." }, { status: 401 });
       }
-      return await deliver(request);
+      if (!request.headers.has(RECOVERED_OWNER_MESSAGE_HEADER)) return await deliver(request);
+      // Startup recovery named the dead owner of an interrupted step: present
+      // its id so the runtime re-runs the step now (see local-world-owner-recovery).
+      const headers = new Headers(request.headers);
+      const messageId = resolveTrustedDeliveryMessageId(headers);
+      headers.delete(RECOVERED_OWNER_MESSAGE_HEADER);
+      if (messageId !== null) headers.set("x-vqs-message-id", messageId);
+      // Copy by parts: the server's request object need not be a native Request.
+      const body = await request.arrayBuffer();
+      return await deliver(new Request(request.url, { body, headers, method: request.method }));
     };
   };
 
   const start = world.start?.bind(world);
   world.start = async () => {
+    // Every queue message from before this point died with its process.
+    const processStartedAtMs = Date.now();
     await start?.();
-    await reenqueueActiveRuns(world);
+    await reenqueueActiveRuns(world, processStartedAtMs);
   };
   return world;
 }
 
 /** Mirrors world-local's startup recovery, but through the stamped `world.queue`. */
-async function reenqueueActiveRuns(world: LocalWorld): Promise<void> {
+async function reenqueueActiveRuns(world: LocalWorld, processStartedAtMs: number): Promise<void> {
   const namespace = process.env[WORKFLOW_QUEUE_NAMESPACE_ENV];
   if (!namespace) {
     throw new Error(
@@ -73,7 +89,17 @@ async function reenqueueActiveRuns(world: LocalWorld): Promise<void> {
     });
     for (const run of page.data) {
       try {
-        await world.queue(`${prefix}${run.workflowName}` as ValidQueueName, { runId: run.runId });
+        await enqueueRecoveredRun({
+          world,
+          runId: run.runId,
+          processStartedAtMs,
+          enqueue: async (headers) =>
+            await world.queue(
+              `${prefix}${run.workflowName}` as ValidQueueName,
+              { runId: run.runId },
+              headers === undefined ? undefined : { headers },
+            ),
+        });
       } catch (error) {
         console.warn(`[eve] Failed to re-enqueue workflow run ${run.runId}:`, error);
       }

@@ -19,6 +19,7 @@ import {
 } from "#internal/workflow/development-generation-context.js";
 import { cancelExpiredDevelopmentRun } from "#internal/workflow/cancel-expired-development-run.js";
 import { isMissingWorkflowRunError } from "#internal/workflow/is-inactive-workflow-run-error.js";
+import { resolveTrustedDeliveryMessageId } from "#internal/workflow/local-world-owner-recovery.js";
 import {
   DEVELOPMENT_WORKER_APP_ROOT_ENV,
   DEVELOPMENT_WORKFLOW_DELIVERY_HEADER,
@@ -190,7 +191,9 @@ function createQueueHandler(
       return Response.json({ error: "Workflow delivery is not trusted." }, { status: 401 });
     }
     const queueName = request.headers.get("x-vqs-queue-name");
-    const messageId = request.headers.get("x-vqs-message-id");
+    // A recovery delivery may stand in for a dead step owner's lost message
+    // (see local-world-owner-recovery); honoured only past the proof above.
+    const messageId = resolveTrustedDeliveryMessageId(request.headers);
     const attempt = Number(request.headers.get("x-vqs-message-attempt"));
     if (
       queueName === null ||

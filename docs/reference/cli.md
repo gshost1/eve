@@ -309,6 +309,8 @@ With the built-in local Workflow World, a new `eve dev` server leaves previous i
 
 Pass `eve dev --resume` to attempt recovery of unfinished runs from previous invocations. Recovery requires a retained snapshot with readable generation metadata. Snapshots from older eve versions with a valid `runtimeAppRoot` remain eligible. Changes to the eve framework or authored workflow sources do not prevent the attempt, but replay can fail and leave the run terminally failed after executing some work. Use `--resume` only when you want to try continuing those previous runs.
 
+A step that was executing when the previous server stopped runs again as soon as its run is recovered, so a tool interrupted mid-call executes a second time. Make externally visible side effects idempotent. `eve start` recovers unfinished local runs the same way on every boot.
+
 Runs with malformed generation metadata remain stored and dormant for that server invocation, including later timer and hook deliveries. Startup with `--resume` reports why recovery was skipped without blocking other eligible runs. Restore malformed snapshot metadata from a backup or start a new session.
 
 Recovery eligibility is decided before startup queue delivery begins. Hot reload does not recheck admitted runs against the latest workflow sources, so follow-up turns, cancellation, and `/new` retain their existing behavior. Changing an authored workflow body while it is running can likewise cause replay failure.

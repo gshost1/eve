@@ -9,6 +9,7 @@ import { DevelopmentRunUnavailableError } from "#internal/workflow/development-r
 import type { ValidQueueName, World } from "#compiled/@workflow/world/index.js";
 import { createWorld } from "#compiled/@workflow/world-local/index.js";
 import { deriveEveWorkflowQueuePrefix } from "#internal/workflow/queue-namespace.js";
+import { enqueueRecoveredRun } from "#internal/workflow/local-world-owner-recovery.js";
 import {
   displayLocalWorkflowWorldDataDirectory,
   resolveLocalWorkflowWorldDataDirectory,
@@ -108,6 +109,8 @@ class LocalParentDevelopmentWorkflowWorld implements ParentDevelopmentWorkflowWo
     }
     // Queue redelivery starts with the World. Decide admission before it can wake retained runs.
     const recoveryGenerationId = this.#resolveActiveGenerationId();
+    // Every queue message from before this point died with the previous server.
+    const processStartedAtMs = Date.now();
     this.#unrecoveredGenerations.clear();
     for (const generationId of await listDevelopmentGenerationIds(this.#appRoot)) {
       if (generationId === recoveryGenerationId) continue;
@@ -130,6 +133,7 @@ class LocalParentDevelopmentWorkflowWorld implements ParentDevelopmentWorkflowWo
         appRoot: this.#appRoot,
         enqueue: this.#queue.bind(this),
         prefix: deriveEveWorkflowQueuePrefix(this.#agentName),
+        processStartedAtMs,
         world: this.#world,
         canRecover: async (generationId) => {
           const availability = await this.#generationAvailability(generationId);
@@ -360,6 +364,7 @@ async function reenqueueActiveDevelopmentRuns(input: {
   readonly enqueue: World["queue"];
   readonly canRecover: (generationId: string) => Promise<boolean>;
   readonly prefix: string;
+  readonly processStartedAtMs: number;
   readonly world: World;
 }): Promise<void> {
   for (const status of ["pending", "running"] as const) {
@@ -381,8 +386,16 @@ async function reenqueueActiveDevelopmentRuns(input: {
       }
       for (const run of page.data) {
         if (!(await input.canRecover(run.deploymentId))) continue;
-        await input.enqueue(`${input.prefix}${run.workflowName}` as ValidQueueName, {
+        await enqueueRecoveredRun({
+          world: input.world,
           runId: run.runId,
+          processStartedAtMs: input.processStartedAtMs,
+          enqueue: async (headers) =>
+            await input.enqueue(
+              `${input.prefix}${run.workflowName}` as ValidQueueName,
+              { runId: run.runId },
+              headers === undefined ? undefined : { headers },
+            ),
         });
       }
       cursor = page.hasMore ? (page.cursor ?? undefined) : undefined;
