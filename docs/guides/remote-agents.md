@@ -238,7 +238,11 @@ before admission. After an explicit `409 REMOTE_AGENT_PROTOCOL_MISMATCH` rejecti
 eve makes one request with that receiver's supported version and fresh credentials.
 It does not negotiate after an accepted response, an unreadable receipt, a rejection
 that names a session, or an unsupported version. Result-only compatibility does not
-add older peers' live streams or human-input relays.
+add older peers' live streams or human-input relays. In particular, a protocol-2
+child that needs approval, a question, or sign-in sends a callback kind this parent
+does not accept. Its turn can fail with `Remote input callback failed with HTTP
+400`, not an actionable parent prompt. Upgrade those children before their callers;
+result-only negotiation is not an in-flight human-wait continuity mechanism.
 
 Upgrade a parent and its remote children together, or let the children's in-flight work finish
 before you upgrade the parent. A remote child callback goes to the parent's current production
@@ -256,8 +260,8 @@ If a remote accepts the create request but its response has an incompatible
 protocol or an unreadable body, the work may have completed. eve stops workflow
 retries and reports that uncertainty. A protocol mismatch includes the accepted
 remote session ID so you can inspect the outcome before sending another request.
-Upgrading the remote does not undo work that it already performed. A receiver's
-explicit protocol rejection remains a compatibility error.
+Upgrading the remote does not undo work that it already performed. An unsupported version, or a rejection of the single negotiated request,
+remains a compatibility error.
 
 ## What to read next
 

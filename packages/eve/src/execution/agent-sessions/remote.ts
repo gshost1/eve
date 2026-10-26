@@ -60,10 +60,10 @@ const DeliveryReceiptResponseSchema = z.object({
 });
 
 const ProtocolRejectionSchema = z.object({
-  ok: z.literal(false),
   code: z.literal(REMOTE_AGENT_PROTOCOL_MISMATCH),
-  protocolVersion: z.number().int().positive(),
-  sessionId: z.never().optional(),
+  ok: z.unknown().optional(),
+  protocolVersion: z.unknown().optional(),
+  sessionId: z.unknown().optional(),
 });
 
 const RemoteCancelResponseSchema = z.union([
@@ -211,26 +211,26 @@ export async function startRemoteAgentSession(input: {
     });
   };
   let response = await post();
-  if (response.status === 409) {
-    const rejected = ProtocolRejectionSchema.safeParse(
-      await response
-        .clone()
-        .json()
-        .catch(() => undefined),
-    );
-    if (
-      rejected.success &&
-      servesRemoteAgentCaller(rejected.data.protocolVersion) &&
-      rejected.data.protocolVersion < REMOTE_AGENT_PROTOCOL_VERSION
-    ) {
-      // This protocol rejection precedes admission; an accepted or ambiguous response never negotiates a resend.
-      requestBody.protocolVersion = rejected.data.protocolVersion;
-      response = await post();
-    }
+  let rejected = response.ok ? undefined : await readProtocolRejection(response);
+  if (
+    response.status === 409 &&
+    rejected?.refusedBeforeAdmission &&
+    servesRemoteAgentCaller(rejected.version) &&
+    rejected.version < REMOTE_AGENT_PROTOCOL_VERSION
+  ) {
+    requestBody.protocolVersion = rejected.version;
+    response = await post();
+    rejected = response.ok ? undefined : await readProtocolRejection(response);
   }
 
   if (!response.ok) {
-    await throwIfRemoteAgentProtocolMismatch(response, input.action.remoteAgentName);
+    if (rejected)
+      throw new FatalError(
+        formatRemoteAgentProtocolMismatch({
+          name: input.action.remoteAgentName,
+          receiverVersion: rejected.version,
+        }),
+      );
     throw new Error(
       `Remote agent "${input.action.remoteAgentName}" create-session request failed with HTTP ${response.status}.`,
     );
@@ -265,18 +265,16 @@ export async function startRemoteAgentSession(input: {
     : { sessionId: parsed.data.sessionId };
 }
 
-/** A receiver that speaks another protocol version rejects the create with its own version. */
-async function throwIfRemoteAgentProtocolMismatch(response: Response, name: string): Promise<void> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return;
-  }
-  if (body === null || typeof body !== "object") return;
-  if (Reflect.get(body, "code") !== REMOTE_AGENT_PROTOCOL_MISMATCH) return;
-  const receiverVersion = readRemoteAgentProtocolVersion(Reflect.get(body, "protocolVersion"));
-  throw new FatalError(formatRemoteAgentProtocolMismatch({ name, receiverVersion }));
+async function readProtocolRejection(response: Response) {
+  const parsed = ProtocolRejectionSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) return undefined;
+  return {
+    version: readRemoteAgentProtocolVersion(parsed.data.protocolVersion),
+    refusedBeforeAdmission:
+      parsed.data.ok === false &&
+      parsed.data.sessionId === undefined &&
+      typeof parsed.data.protocolVersion === "number",
+  };
 }
 
 function buildForwardedTraceAssertion(input: {
