@@ -233,6 +233,13 @@ A protocol-3 parent also accepts earlier remotes' results and failures, but cann
 live streams or receive their human-input requests. Unsupported versions fail at start with an
 error naming both versions.
 
+A receiver on an earlier supported protocol can reject a new caller's create request
+before admission. After an explicit `409 REMOTE_AGENT_PROTOCOL_MISMATCH` rejection,
+eve makes one request with that receiver's supported version and fresh credentials.
+It does not negotiate after an accepted response, an unreadable receipt, a rejection
+that names a session, or an unsupported version. Result-only compatibility does not
+add older peers' live streams or human-input relays.
+
 Upgrade a parent and its remote children together, or let the children's in-flight work finish
 before you upgrade the parent. A remote child callback goes to the parent's current production
 deployment, not to the deployment that started the call. So a child on an earlier eve that asks

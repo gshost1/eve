@@ -7,9 +7,9 @@ import { ResetResponseSchema, type ResetResponse } from "#protocol/reset-session
 import {
   REMOTE_AGENT_PROTOCOL_MISMATCH,
   REMOTE_AGENT_PROTOCOL_VERSION,
-  UNVERSIONED_REMOTE_AGENT_PROTOCOL,
   formatRemoteAgentProtocolMismatch,
   readRemoteAgentProtocolVersion,
+  servesRemoteAgentCaller,
 } from "#protocol/remote-agent-protocol.js";
 import {
   createEveCallbackRoutePath,
@@ -57,6 +57,13 @@ const DeliveryReceiptResponseSchema = z.object({
   ok: z.literal(true),
   sessionId: z.string().min(1),
   deliveryId: z.string().min(1),
+});
+
+const ProtocolRejectionSchema = z.object({
+  ok: z.literal(false),
+  code: z.literal(REMOTE_AGENT_PROTOCOL_MISMATCH),
+  protocolVersion: z.number().int().positive(),
+  sessionId: z.never().optional(),
 });
 
 const RemoteCancelResponseSchema = z.union([
@@ -170,37 +177,57 @@ export async function startRemoteAgentSession(input: {
     requestBody.operationId = input.operationId;
   }
 
-  const headers = await resolveRemoteAgentRequestHeaders(input.remote);
-  const traceparent = formatTraceparent(input.parent?.traceContext);
-  if (traceparent !== undefined) setHeader(headers, "traceparent", traceparent);
-  setHeader(
-    headers,
-    "tracestate",
-    writeAgentDispatchTracestate(readHeader(headers, "tracestate"), input.parent?.traceContext),
-  );
-  const baggage = writeForwardedAudienceBaggage(
-    readHeader(headers, "baggage"),
-    buildForwardedTraceAssertion({
-      forwardedPrincipal,
-      originAudience: input.originAudience,
-      parentTraceContext: input.parent?.traceContext,
-      traceparent,
-    }),
-  );
-  const conversationBaggage = writeConversationBaggage(baggage, input.parent?.conversationId);
-  setHeader(
-    headers,
-    "baggage",
-    writeForwardedParentSessionBaggage(conversationBaggage, input.parent?.lineage),
-  );
-  const response = await agentDelegation.fetch(createRemoteAgentSessionUrl(input.remote), {
-    body: JSON.stringify(requestBody),
-    headers: {
-      "content-type": "application/json",
-      ...headers,
-    },
-    method: "POST",
-  });
+  const post = async (): Promise<Response> => {
+    const headers = await resolveRemoteAgentRequestHeaders(input.remote);
+    const traceparent = formatTraceparent(input.parent?.traceContext);
+    if (traceparent !== undefined) setHeader(headers, "traceparent", traceparent);
+    setHeader(
+      headers,
+      "tracestate",
+      writeAgentDispatchTracestate(readHeader(headers, "tracestate"), input.parent?.traceContext),
+    );
+    const baggage = writeForwardedAudienceBaggage(
+      readHeader(headers, "baggage"),
+      buildForwardedTraceAssertion({
+        forwardedPrincipal,
+        originAudience: input.originAudience,
+        parentTraceContext: input.parent?.traceContext,
+        traceparent,
+      }),
+    );
+    const conversationBaggage = writeConversationBaggage(baggage, input.parent?.conversationId);
+    setHeader(
+      headers,
+      "baggage",
+      writeForwardedParentSessionBaggage(conversationBaggage, input.parent?.lineage),
+    );
+    return agentDelegation.fetch(createRemoteAgentSessionUrl(input.remote), {
+      body: JSON.stringify(requestBody),
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+      },
+      method: "POST",
+    });
+  };
+  let response = await post();
+  if (response.status === 409) {
+    const rejected = ProtocolRejectionSchema.safeParse(
+      await response
+        .clone()
+        .json()
+        .catch(() => undefined),
+    );
+    if (
+      rejected.success &&
+      servesRemoteAgentCaller(rejected.data.protocolVersion) &&
+      rejected.data.protocolVersion < REMOTE_AGENT_PROTOCOL_VERSION
+    ) {
+      // This protocol rejection precedes admission; an accepted or ambiguous response never negotiates a resend.
+      requestBody.protocolVersion = rejected.data.protocolVersion;
+      response = await post();
+    }
+  }
 
   if (!response.ok) {
     await throwIfRemoteAgentProtocolMismatch(response, input.action.remoteAgentName);
@@ -225,11 +252,7 @@ export async function startRemoteAgentSession(input: {
     );
   }
   const receiverVersion = readRemoteAgentProtocolVersion(parsed.data.protocolVersion);
-  // A protocol-1 remote already accepted the work and settles it with the same result callbacks.
-  if (
-    receiverVersion !== REMOTE_AGENT_PROTOCOL_VERSION &&
-    receiverVersion !== UNVERSIONED_REMOTE_AGENT_PROTOCOL
-  ) {
+  if (!servesRemoteAgentCaller(receiverVersion)) {
     throw new FatalError(
       `${formatRemoteAgentProtocolMismatch({ name: input.action.remoteAgentName, receiverVersion })} ${UNKNOWN_REMOTE_OUTCOME} Remote session: ${parsed.data.sessionId}.`,
     );

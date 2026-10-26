@@ -287,16 +287,81 @@ describe("startRemoteAgentSession", () => {
     });
   });
 
-  it("accepts an unversioned (protocol 1) remote's create response and names its protocol", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json({ ok: true, sessionId: "legacy-session", status: "accepted" }),
+  it.each([undefined, 2])(
+    "accepts an earlier protocol's result-only session (%s)",
+    async (protocolVersion) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json({
+            ok: true,
+            sessionId: "legacy-session",
+            status: "accepted",
+            protocolVersion,
+          }),
         ),
-    );
+      );
 
+      await expect(
+        startRemoteAgentSession({
+          action: createAction(),
+          callbackBaseUrl: "https://caller.example.com",
+          remote: createRemoteAgent(),
+          session: { continuationToken: "eve:parent-token" },
+        }),
+      ).resolves.toEqual({ earlierProtocol: protocolVersion ?? 1, sessionId: "legacy-session" });
+    },
+  );
+
+  it("negotiates protocol 2 once after an explicit pre-admission rejection and refreshes credentials", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { ok: false, code: "REMOTE_AGENT_PROTOCOL_MISMATCH", protocolVersion: 2 },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { ok: true, protocolVersion: 2, sessionId: "older-child", status: "accepted" },
+          { status: 202 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    let credentials = 0;
+    await expect(
+      startRemoteAgentSession({
+        action: createAction(),
+        callbackBaseUrl: "https://caller.example.com",
+        operationId: "stable-create",
+        remote: {
+          ...createRemoteAgent(),
+          auth: async () => ({ headers: { authorization: `Bearer fixture-${++credentials}` } }),
+        },
+        session: { continuationToken: "eve:parent-token" },
+      }),
+    ).resolves.toEqual({ earlierProtocol: 2, sessionId: "older-child" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map(([, options]) => JSON.parse(options.body as string));
+    expect(bodies.map((body) => body.protocolVersion)).toEqual([3, 2]);
+    expect(bodies[1]).toEqual({ ...bodies[0], protocolVersion: 2 });
+    expect(fetchMock.mock.calls.map(([, options]) => options.headers.authorization)).toEqual([
+      "Bearer fixture-1",
+      "Bearer fixture-2",
+    ]);
+  });
+
+  it("does not loop when the older receiver rejects the negotiated version too", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json(
+          { ok: false, code: "REMOTE_AGENT_PROTOCOL_MISMATCH", protocolVersion: 2 },
+          { status: 409 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
     await expect(
       startRemoteAgentSession({
         action: createAction(),
@@ -304,7 +369,34 @@ describe("startRemoteAgentSession", () => {
         remote: createRemoteAgent(),
         session: { continuationToken: "eve:parent-token" },
       }),
-    ).resolves.toEqual({ earlierProtocol: 1, sessionId: "legacy-session" });
+    ).rejects.toBeInstanceOf(FatalError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [409, { ok: false, sessionId: "already-named" }],
+    [409, { ok: true }],
+    [500, { ok: false }],
+    [409, { ok: false, protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION + 1 }],
+  ])("never negotiates an ambiguous or unsupported rejection (%s, %j)", async (status, fields) => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json(
+          { code: "REMOTE_AGENT_PROTOCOL_MISMATCH", protocolVersion: 2, ...fields },
+          { status },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      startRemoteAgentSession({
+        action: createAction(),
+        callbackBaseUrl: "https://caller.example.com",
+        remote: createRemoteAgent(),
+        session: { continuationToken: "eve:parent-token" },
+      }),
+    ).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])(
