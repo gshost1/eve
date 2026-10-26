@@ -8330,6 +8330,69 @@ describe("createToolLoopHarness", () => {
     });
   });
 
+  it("fails the turn and parks the session when the in-turn compaction summary call fails", async () => {
+    const logs = captureLogRecords();
+    vi.mocked(shouldCompact).mockReturnValue(true);
+    vi.mocked(compactMessages).mockRejectedValue(
+      Object.assign(new Error("Too Many Requests"), {
+        isRetryable: true,
+        name: "AI_APICallError",
+        statusCode: 429,
+      }),
+    );
+
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(
+      createTestConfig(emit, {
+        resolveModel: vi
+          .fn()
+          .mockResolvedValue({ modelId: "gpt-4", provider: "openai" } as LanguageModel),
+      }),
+    );
+    const session = createTestSession({
+      history: [
+        { content: "old message", kind: "user" as const, role: "user" },
+        { content: "old reply", role: "assistant" },
+      ],
+    });
+
+    const result = await runStep(session, { message: "Hi" });
+
+    // The summary call already spent its retries. The turn fails like any other model-call
+    // failure and the session parks with its history uncompacted, instead of the error leaving
+    // the step for Workflow to retry and then end the session.
+    expect(result.next).toBeNull();
+    expect(result.settledTurn).toMatchObject({ isError: true });
+    expect(String(result.settledTurn?.output)).toContain("Too Many Requests");
+    expect(getCompatibilityEventTypes(events)).toEqual([
+      "session.started",
+      "turn.started",
+      "message.received",
+      "step.started",
+      "compaction.requested",
+      "step.failed",
+      "turn.failed",
+      "session.waiting",
+    ]);
+    expect(events.find((e) => e.type === "turn.failed")?.data).toMatchObject({
+      code: "MODEL_CALL_FAILED",
+      terminal: false,
+    });
+    expect(result.session.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: "old message" }),
+        expect.objectContaining({ content: "old reply" }),
+      ]),
+    );
+    expect(ToolLoopAgent).not.toHaveBeenCalled();
+    expect(logs.records).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "model call failed — parking session for retry by the user",
+      }),
+    );
+  });
+
   it("groups Gateway compaction under the forwarded trace conversation", async () => {
     vi.mocked(shouldCompact).mockReturnValue(true);
     mockCompaction([

@@ -133,18 +133,25 @@ export async function runModelStep(
   try {
     result = await caller.call({ suppressStepStartedEmission: true });
   } catch (error) {
-    caller.throwIfCompactionFailed();
     throwIfTurnAborted(step.config.abortSignal);
     if (generation.interrupted) return caller.steered();
+    // A failed compaction fails the turn like any other model-call failure, and the session parks
+    // with its history uncompacted. Thrown out of the step instead, the error reaches Workflow,
+    // which retries the whole step and then ends the session.
+    const failedCompaction = caller.failedCompaction();
+    if (failedCompaction !== undefined) return reportModelCallFailure(step, failedCompaction.error);
     const recovery = await recoverModelCall({
       call: (options) => caller.call(options),
       error,
       sessionId: step.session.sessionId,
       turnId: step.position().turnId,
     });
-    caller.throwIfCompactionFailed();
     throwIfTurnAborted(step.config.abortSignal);
     if (generation.interrupted) return caller.steered();
+    const recoveryCompaction = caller.failedCompaction();
+    if (recoveryCompaction !== undefined) {
+      return reportModelCallFailure(step, recoveryCompaction.error);
+    }
     if (!("result" in recovery)) return reportModelCallFailure(step, recovery.error);
     result = recovery.result;
   }

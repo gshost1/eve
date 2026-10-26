@@ -22,7 +22,10 @@ Before summarizing, eve tries to shorten oversized tool results in older history
 It checks whether that reduction is sufficient using the last provider-reported
 input token count plus an estimate of new messages. A smaller character estimate
 alone cannot satisfy compaction triggered by a higher provider count. If trimming
-cannot free enough space, eve summarizes the older history.
+cannot free enough space, eve summarizes the older history. If the summary call
+fails after its retries, the turn fails with `MODEL_CALL_FAILED` and `terminal:
+false`, and the session waits with its history uncompacted, so the next message
+tries again.
 
 First-class [memory](../memory) participates in a separate lifecycle. eve asks
 providers to capture before compaction, excludes attributed recalled records
